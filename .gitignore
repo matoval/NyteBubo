@@ -1,0 +1,54 @@
+config.yaml
+
+# Environment variables
+.env
+.env.*
+!.env.example
+*.env
+
+# Credentials and secrets
+secrets.yaml
+secrets.yml
+credentials.json
+credentials.yaml
+*secret*
+*credential*
+*password*
+
+# Private keys and certificates
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# API keys and tokens
+*.token
+*apikey*
+*api-key*
+*api_key*
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cloud provider credentials
+.aws/
+.azure/
+.gcloud/
+
+# CI/CD secrets
+.github/secrets/
+
+# Other sensitive patterns
+**/secrets/
+**/credentials/
+**/*secret*
+**/*credential*
