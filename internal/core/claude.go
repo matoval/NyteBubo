@@ -3,10 +3,19 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+// TokenUsage tracks Claude API token usage
+type TokenUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	EstimatedCost float64
+}
 
 // ClaudeAgent wraps the Anthropic Claude API client
 type ClaudeAgent struct {
@@ -32,8 +41,8 @@ type AgentMessage struct {
 	Content string
 }
 
-// SendMessage sends a message to Claude and gets a response
-func (ca *ClaudeAgent) SendMessage(messages []AgentMessage, systemPrompt string) (string, error) {
+// SendMessage sends a message to Claude and gets a response with usage tracking
+func (ca *ClaudeAgent) SendMessage(messages []AgentMessage, systemPrompt string) (string, TokenUsage, error) {
 	// Convert our messages to the SDK format
 	var apiMessages []anthropic.MessageParam
 	for _, msg := range messages {
@@ -44,7 +53,7 @@ func (ca *ClaudeAgent) SendMessage(messages []AgentMessage, systemPrompt string)
 		case "assistant":
 			role = anthropic.MessageParamRoleAssistant
 		default:
-			return "", fmt.Errorf("invalid role: %s", msg.Role)
+			return "", TokenUsage{}, fmt.Errorf("invalid role: %s", msg.Role)
 		}
 
 		apiMessages = append(apiMessages, anthropic.MessageParam{
@@ -68,25 +77,51 @@ func (ca *ClaudeAgent) SendMessage(messages []AgentMessage, systemPrompt string)
 	// Send the message
 	message, err := ca.client.Messages.New(ca.ctx, params)
 	if err != nil {
-		return "", fmt.Errorf("failed to send message: %w", err)
+		return "", TokenUsage{}, fmt.Errorf("failed to send message: %w", err)
 	}
+
+	// Track token usage
+	usage := TokenUsage{
+		InputTokens:   message.Usage.InputTokens,
+		OutputTokens:  message.Usage.OutputTokens,
+		TotalTokens:   message.Usage.InputTokens + message.Usage.OutputTokens,
+		EstimatedCost: calculateCost(message.Usage.InputTokens, message.Usage.OutputTokens),
+	}
+
+	// Log usage information
+	log.Printf("📊 Claude API - Input: %d | Output: %d | Total: %d tokens | Cost: $%.4f",
+		usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.EstimatedCost)
 
 	// Extract the response text
 	if len(message.Content) == 0 {
-		return "", fmt.Errorf("no content in response")
+		return "", usage, fmt.Errorf("no content in response")
 	}
 
 	// Get the text from the first content block
 	contentBlock := message.Content[0]
 	if contentBlock.Type == "text" && contentBlock.Text != "" {
-		return contentBlock.Text, nil
+		return contentBlock.Text, usage, nil
 	}
 
-	return "", fmt.Errorf("unexpected content type: %s", contentBlock.Type)
+	return "", usage, fmt.Errorf("unexpected content type: %s", contentBlock.Type)
+}
+
+// calculateCost estimates the cost based on Claude 3.7 Sonnet pricing
+// As of January 2025: $3 per million input tokens, $15 per million output tokens
+func calculateCost(inputTokens, outputTokens int64) float64 {
+	const (
+		inputCostPerMillion  = 3.0
+		outputCostPerMillion = 15.0
+	)
+
+	inputCost := float64(inputTokens) / 1000000.0 * inputCostPerMillion
+	outputCost := float64(outputTokens) / 1000000.0 * outputCostPerMillion
+
+	return inputCost + outputCost
 }
 
 // AnalyzeIssue asks Claude to analyze a GitHub issue
-func (ca *ClaudeAgent) AnalyzeIssue(title, body string) (string, error) {
+func (ca *ClaudeAgent) AnalyzeIssue(title, body string) (string, TokenUsage, error) {
 	systemPrompt := `You are a helpful AI coding assistant that analyzes GitHub issues.
 Your job is to:
 1. Understand what the issue is asking for
@@ -115,7 +150,7 @@ Provide:
 }
 
 // GenerateCode asks Claude to generate code for a specific task
-func (ca *ClaudeAgent) GenerateCode(task, context, language string, conversationHistory []AgentMessage) (string, error) {
+func (ca *ClaudeAgent) GenerateCode(task, context, language string, conversationHistory []AgentMessage) (string, TokenUsage, error) {
 	systemPrompt := fmt.Sprintf(`You are an expert software engineer working on a GitHub issue.
 You have full access to the repository and need to implement the requested changes.
 
@@ -135,7 +170,7 @@ Format your response with clear sections for each file that needs to be modified
 }
 
 // ReviewFeedback processes review feedback and generates updated code
-func (ca *ClaudeAgent) ReviewFeedback(feedback string, previousCode string, conversationHistory []AgentMessage) (string, error) {
+func (ca *ClaudeAgent) ReviewFeedback(feedback string, previousCode string, conversationHistory []AgentMessage) (string, TokenUsage, error) {
 	systemPrompt := `You are an expert software engineer responding to code review feedback.
 Your job is to:
 1. Understand the feedback

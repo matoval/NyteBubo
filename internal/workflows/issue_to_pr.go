@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"NyteBubo/internal/core"
 )
@@ -63,10 +64,15 @@ func (ia *IssueAgent) HandleIssueAssignment(owner, repo string, issueNumber int)
 	title := issue.GetTitle()
 	body := issue.GetBody()
 
-	response, err := ia.claude.AnalyzeIssue(title, body)
+	response, usage, err := ia.claude.AnalyzeIssue(title, body)
 	if err != nil {
 		return fmt.Errorf("failed to analyze issue: %w", err)
 	}
+
+	// Track token usage
+	state.TotalInputTokens += usage.InputTokens
+	state.TotalOutputTokens += usage.OutputTokens
+	state.TotalCost += usage.EstimatedCost
 
 	// Update conversation history
 	state.Conversation = append(state.Conversation, core.AgentMessage{
@@ -123,10 +129,15 @@ func (ia *IssueAgent) HandleIssueComment(owner, repo string, issueNumber int, co
 	})
 
 	// Get Claude's response
-	response, err := ia.claude.SendMessage(state.Conversation, "You are a helpful coding assistant working on a GitHub issue. Respond to the user's comment.")
+	response, usage, err := ia.claude.SendMessage(state.Conversation, "You are a helpful coding assistant working on a GitHub issue. Respond to the user's comment.")
 	if err != nil {
 		return fmt.Errorf("failed to get response: %w", err)
 	}
+
+	// Track token usage
+	state.TotalInputTokens += usage.InputTokens
+	state.TotalOutputTokens += usage.OutputTokens
+	state.TotalCost += usage.EstimatedCost
 
 	// Update conversation
 	state.Conversation = append(state.Conversation, core.AgentMessage{
@@ -204,10 +215,15 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 	task := fmt.Sprintf("Implement the changes for issue #%d", issueNumber)
 	repoContext := fmt.Sprintf("Repository: %s/%s, Language: %s", owner, repo, language)
 
-	codeResponse, err := ia.claude.GenerateCode(task, repoContext, language, state.Conversation)
+	codeResponse, usage, err := ia.claude.GenerateCode(task, repoContext, language, state.Conversation)
 	if err != nil {
 		return fmt.Errorf("failed to generate code: %w", err)
 	}
+
+	// Track token usage
+	state.TotalInputTokens += usage.InputTokens
+	state.TotalOutputTokens += usage.OutputTokens
+	state.TotalCost += usage.EstimatedCost
 
 	// Parse the code response and extract file changes
 	fileChanges := parseCodeChanges(codeResponse)
@@ -284,10 +300,15 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 	})
 
 	// Get updated code from Claude
-	response, err := ia.claude.ReviewFeedback(commentBody, "", state.Conversation)
+	response, usage, err := ia.claude.ReviewFeedback(commentBody, "", state.Conversation)
 	if err != nil {
 		return fmt.Errorf("failed to get review response: %w", err)
 	}
+
+	// Track token usage
+	state.TotalInputTokens += usage.InputTokens
+	state.TotalOutputTokens += usage.OutputTokens
+	state.TotalCost += usage.EstimatedCost
 
 	// Update conversation
 	state.Conversation = append(state.Conversation, core.AgentMessage{
@@ -346,4 +367,24 @@ func extractIssueNumber(body string) int {
 // Close closes the agent and cleans up resources
 func (ia *IssueAgent) Close() error {
 	return ia.stateManager.Close()
+}
+
+// StartPolling begins polling for assigned issues
+func (ia *IssueAgent) StartPolling(pollIntervalSeconds int, repositories []string) error {
+	poller, err := core.NewPoller(
+		ia.github,
+		ia.stateManager,
+		core.PollerConfig{
+			PollInterval: time.Duration(pollIntervalSeconds) * time.Second,
+			Repositories: repositories,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create poller: %w", err)
+	}
+
+	// Start polling and handle new issues
+	return poller.Start(func(owner, repo string, issueNumber int) error {
+		return ia.HandleIssueAssignment(owner, repo, issueNumber)
+	})
 }

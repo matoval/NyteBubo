@@ -174,3 +174,69 @@ func (gc *GitHubClient) CreateBranch(owner, repo, newBranch, baseBranch string) 
 
 	return nil
 }
+
+// GetAuthenticatedUser retrieves the currently authenticated user
+func (gc *GitHubClient) GetAuthenticatedUser() (*github.User, error) {
+	user, _, err := gc.client.Users.Get(gc.ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get authenticated user: %w", err)
+	}
+	return user, nil
+}
+
+// ListAssignedIssues retrieves all issues assigned to a specific user across specified repositories
+func (gc *GitHubClient) ListAssignedIssues(username string, repositories []string) ([]*github.Issue, error) {
+	var allIssues []*github.Issue
+
+	// Build repository filter query
+	repoQuery := ""
+	for i, repo := range repositories {
+		if i > 0 {
+			repoQuery += " "
+		}
+		repoQuery += "repo:" + repo
+	}
+
+	// Search for issues assigned to the user
+	query := fmt.Sprintf("is:issue is:open assignee:%s %s", username, repoQuery)
+	opts := &github.SearchOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+
+	result, _, err := gc.client.Search.Issues(gc.ctx, query, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search issues: %w", err)
+	}
+
+	allIssues = append(allIssues, result.Issues...)
+
+	return allIssues, nil
+}
+
+// ListRepositoryIssues retrieves all open issues from a specific repository
+func (gc *GitHubClient) ListRepositoryIssues(owner, repo, assignee string) ([]*github.Issue, error) {
+	opts := &github.IssueListByRepoOptions{
+		State:     "open",
+		Assignee:  assignee,
+		Sort:      "created",
+		Direction: "desc",
+		ListOptions: github.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	issues, _, err := gc.client.Issues.ListByRepo(gc.ctx, owner, repo, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list repository issues: %w", err)
+	}
+
+	// Filter out pull requests (GitHub API includes PRs in issues endpoint)
+	var issuesOnly []*github.Issue
+	for _, issue := range issues {
+		if !issue.IsPullRequest() {
+			issuesOnly = append(issuesOnly, issue)
+		}
+	}
+
+	return issuesOnly, nil
+}

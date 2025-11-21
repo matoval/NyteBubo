@@ -15,12 +15,17 @@ type State struct {
 	Owner           string
 	Repo            string
 	IssueNumber     int
-	Status          string // "analyzing", "waiting_for_clarification", "ready_to_implement", "implementing", "pr_created", "reviewing"
+	Status          string // "analyzing", "waiting_for_clarification", "ready_to_implement", "implementing", "pr_created", "reviewing", "completed"
 	PRNumber        *int
 	BranchName      string
 	Conversation    []AgentMessage
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// Token usage tracking
+	TotalInputTokens  int64
+	TotalOutputTokens int64
+	TotalCost         float64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	CompletedAt       *time.Time
 }
 
 // StateManager handles persistence of agent state
@@ -56,8 +61,12 @@ func createTables(db *sql.DB) error {
 		pr_number INTEGER,
 		branch_name TEXT,
 		conversation TEXT,
+		total_input_tokens INTEGER DEFAULT 0,
+		total_output_tokens INTEGER DEFAULT 0,
+		total_cost REAL DEFAULT 0,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
+		completed_at DATETIME,
 		UNIQUE(owner, repo, issue_number)
 	);
 
@@ -77,7 +86,8 @@ func createTables(db *sql.DB) error {
 func (sm *StateManager) GetState(owner, repo string, issueNumber int) (*State, error) {
 	query := `
 		SELECT id, owner, repo, issue_number, status, pr_number, branch_name,
-		       conversation, created_at, updated_at
+		       conversation, total_input_tokens, total_output_tokens, total_cost,
+		       created_at, updated_at, completed_at
 		FROM agent_states
 		WHERE owner = ? AND repo = ? AND issue_number = ?
 	`
@@ -85,6 +95,7 @@ func (sm *StateManager) GetState(owner, repo string, issueNumber int) (*State, e
 	var state State
 	var conversationJSON string
 	var prNumber sql.NullInt64
+	var completedAt sql.NullTime
 
 	err := sm.db.QueryRow(query, owner, repo, issueNumber).Scan(
 		&state.ID,
@@ -95,8 +106,12 @@ func (sm *StateManager) GetState(owner, repo string, issueNumber int) (*State, e
 		&prNumber,
 		&state.BranchName,
 		&conversationJSON,
+		&state.TotalInputTokens,
+		&state.TotalOutputTokens,
+		&state.TotalCost,
 		&state.CreatedAt,
 		&state.UpdatedAt,
+		&completedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -109,6 +124,10 @@ func (sm *StateManager) GetState(owner, repo string, issueNumber int) (*State, e
 	if prNumber.Valid {
 		prNum := int(prNumber.Int64)
 		state.PRNumber = &prNum
+	}
+
+	if completedAt.Valid {
+		state.CompletedAt = &completedAt.Time
 	}
 
 	// Unmarshal conversation
@@ -136,14 +155,20 @@ func (sm *StateManager) SaveState(state *State) error {
 	state.UpdatedAt = now
 
 	query := `
-		INSERT INTO agent_states (owner, repo, issue_number, status, pr_number, branch_name, conversation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agent_states (owner, repo, issue_number, status, pr_number, branch_name, conversation,
+		                          total_input_tokens, total_output_tokens, total_cost,
+		                          created_at, updated_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner, repo, issue_number) DO UPDATE SET
 			status = excluded.status,
 			pr_number = excluded.pr_number,
 			branch_name = excluded.branch_name,
 			conversation = excluded.conversation,
-			updated_at = excluded.updated_at
+			total_input_tokens = excluded.total_input_tokens,
+			total_output_tokens = excluded.total_output_tokens,
+			total_cost = excluded.total_cost,
+			updated_at = excluded.updated_at,
+			completed_at = excluded.completed_at
 	`
 
 	result, err := sm.db.Exec(
@@ -155,8 +180,12 @@ func (sm *StateManager) SaveState(state *State) error {
 		state.PRNumber,
 		state.BranchName,
 		string(conversationJSON),
+		state.TotalInputTokens,
+		state.TotalOutputTokens,
+		state.TotalCost,
 		state.CreatedAt,
 		state.UpdatedAt,
+		state.CompletedAt,
 	)
 
 	if err != nil {
@@ -182,6 +211,72 @@ func (sm *StateManager) DeleteState(owner, repo string, issueNumber int) error {
 		return fmt.Errorf("failed to delete state: %w", err)
 	}
 	return nil
+}
+
+// GetAllIssuesWithStats retrieves all issues with their usage stats
+func (sm *StateManager) GetAllIssuesWithStats() ([]State, error) {
+	query := `
+		SELECT id, owner, repo, issue_number, status, pr_number, branch_name,
+		       conversation, total_input_tokens, total_output_tokens, total_cost,
+		       created_at, updated_at, completed_at
+		FROM agent_states
+		ORDER BY created_at DESC
+	`
+
+	rows, err := sm.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query states: %w", err)
+	}
+	defer rows.Close()
+
+	var states []State
+	for rows.Next() {
+		var state State
+		var conversationJSON string
+		var prNumber sql.NullInt64
+		var completedAt sql.NullTime
+
+		err := rows.Scan(
+			&state.ID,
+			&state.Owner,
+			&state.Repo,
+			&state.IssueNumber,
+			&state.Status,
+			&prNumber,
+			&state.BranchName,
+			&conversationJSON,
+			&state.TotalInputTokens,
+			&state.TotalOutputTokens,
+			&state.TotalCost,
+			&state.CreatedAt,
+			&state.UpdatedAt,
+			&completedAt,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		if prNumber.Valid {
+			prNum := int(prNumber.Int64)
+			state.PRNumber = &prNum
+		}
+
+		if completedAt.Valid {
+			state.CompletedAt = &completedAt.Time
+		}
+
+		// Unmarshal conversation
+		if conversationJSON != "" {
+			if err := json.Unmarshal([]byte(conversationJSON), &state.Conversation); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal conversation: %w", err)
+			}
+		}
+
+		states = append(states, state)
+	}
+
+	return states, nil
 }
 
 // Close closes the database connection

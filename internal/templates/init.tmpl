@@ -1,16 +1,25 @@
----
-project_name: {{.ProjectName}}
-git_remote: {{.GitRemote}}
-programming_language: {{.Lang}}
-frameworks:
-{{- range .Frameworks}}
-   - {{.}}
-{{- end}}
+# NyteBubo Agent Configuration
+# GitHub issue-to-PR automation agent
 
-# Agent configuration for GitHub issue-to-PR automation
-agent:
-  enabled: false
-  server_port: 8080
-  # Set these via environment variables: CLAUDE_API_KEY, GITHUB_TOKEN, WEBHOOK_SECRET
-  working_dir: "./workspace"
-  state_db_path: "./agent_state.db"
+# Working directories
+working_dir: "./workspace"
+state_db_path: "./agent_state.db"
+
+# Polling configuration (runs on local server without public exposure)
+poll_interval: 30  # Check for new issues every 30 seconds
+repositories:
+  - "owner/repo"  # Add repositories to monitor (format: "owner/repo")
+  # - "owner/another-repo"
+
+# Security: Set credentials via environment variables (recommended)
+# CLAUDE_API_KEY - Your Anthropic Claude API key
+# GITHUB_TOKEN - Your GitHub Personal Access Token
+
+# Alternatively, you can set them here (not recommended for production)
+# claude_api_key: ""
+# github_token: ""
+
+# Optional: Webhook mode (requires public endpoint)
+# webhook_mode: false
+# server_port: 8080
+# webhook_secret: ""
