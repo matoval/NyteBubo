@@ -6,3 +6,11 @@ frameworks:
 {{- range .Frameworks}}
    - {{.}}
 {{- end}}
+
+# Agent configuration for GitHub issue-to-PR automation
+agent:
+  enabled: false
+  server_port: 8080
+  # Set these via environment variables: CLAUDE_API_KEY, GITHUB_TOKEN, WEBHOOK_SECRET
+  working_dir: "./workspace"
+  state_db_path: "./agent_state.db"
