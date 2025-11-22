@@ -25,6 +25,13 @@ NyteBubo is a focused polling agent that monitors GitHub repositories for issue 
 
 ## Prerequisites
 
+### For Docker (Recommended)
+- Docker installed
+- GitHub account with repository access
+- Anthropic Claude API key
+- GitHub Personal Access Token with repo permissions
+
+### For Building from Source
 - Go 1.22 or higher
 - GitHub account with repository access
 - Anthropic Claude API key
@@ -32,7 +39,17 @@ NyteBubo is a focused polling agent that monitors GitHub repositories for issue 
 
 ## Installation
 
-### Build from Source
+### Option 1: Using Docker (Recommended)
+
+Pull the pre-built image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/matoval/nytebubo:latest
+```
+
+No build tools required! Skip to [Quick Start with Docker](#quick-start-with-docker).
+
+### Option 2: Build from Source
 
 ```bash
 git clone https://github.com/matoval/NyteBubo.git
@@ -40,7 +57,15 @@ cd NyteBubo
 go build -o nyte-bubo
 ```
 
-### Install Binary
+**Or build your own Docker image:**
+
+```bash
+git clone https://github.com/matoval/NyteBubo.git
+cd NyteBubo
+docker build -t nytebubo:latest .
+```
+
+### Option 3: Install Binary
 
 ```bash
 go install github.com/matoval/NyteBubo@latest
@@ -48,7 +73,62 @@ go install github.com/matoval/NyteBubo@latest
 
 ## Quick Start
 
-### 1. Create Configuration
+### Quick Start with Docker
+
+If you're using Docker, follow these steps:
+
+#### 1. Create a configuration directory
+
+```bash
+mkdir -p nytebubo-config
+cd nytebubo-config
+```
+
+#### 2. Create config.yaml
+
+Create a `config.yaml` file in the directory:
+
+```yaml
+working_dir: "./workspace"
+state_db_path: "./agent_state.db"
+
+# Polling configuration
+poll_interval: 30  # Check every 30 seconds
+repositories:
+  - "yourusername/your-repo"
+  - "yourorg/another-repo"
+```
+
+#### 3. Run with Docker
+
+```bash
+docker run -d \
+  --name nytebubo \
+  -e CLAUDE_API_KEY="your-claude-api-key" \
+  -e GITHUB_TOKEN="your-github-personal-access-token" \
+  -v $(pwd):/root/.nytebubo \
+  ghcr.io/matoval/nytebubo:latest
+```
+
+#### 4. View logs
+
+```bash
+docker logs -f nytebubo
+```
+
+#### 5. View usage statistics
+
+```bash
+docker exec nytebubo ./nytebubo stats
+```
+
+That's it! The agent is now running in a container and polling your repositories.
+
+### Quick Start from Source
+
+If you built from source or installed the binary:
+
+#### 1. Create Configuration
 
 Create a `config.yaml` file:
 
@@ -69,7 +149,7 @@ repositories:
   - "yourorg/another-repo"
 ```
 
-### 2. Set Environment Variables
+#### 2. Set Environment Variables
 
 For security, set your API credentials as environment variables:
 
@@ -78,7 +158,7 @@ export CLAUDE_API_KEY="your-claude-api-key"
 export GITHUB_TOKEN="your-github-personal-access-token"
 ```
 
-### 3. Start the Agent
+#### 3. Start the Agent
 
 ```bash
 ./nyte-bubo agent
@@ -88,7 +168,7 @@ The agent will start polling the specified repositories every 30 seconds for ass
 
 That's it! No public endpoint, no webhooks to configure. The agent runs entirely on your local network.
 
-### 4. View Usage Statistics
+#### 4. View Usage Statistics
 
 Check token usage and costs for resolved issues:
 

@@ -1,0 +1,34 @@
+# Git files
+.git
+.gitignore
+
+# Environment files
+.env
+.env.local
+
+# Documentation
+*.md
+SETUP.md
+
+# Build artifacts
+nyte-bubo
+NyteBubo
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+*_test.go
