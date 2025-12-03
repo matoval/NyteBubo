@@ -8,17 +8,17 @@ Before you begin, make sure you have:
 
 1. **Go 1.22+** installed
 2. **GitHub repositories** you want to monitor
-3. **An Anthropic API account** with credits
+3. **An OpenRouter API account** with credits
 4. **A local server** (home server, VPS, or even your laptop)
 
 ## Step 1: Get Your API Credentials
 
-### Claude API Key
+### OpenRouter API Key
 
-1. Go to https://console.anthropic.com/
+1. Go to https://openrouter.ai/keys
 2. Sign in or create an account
-3. Navigate to API Keys section
-4. Create a new API key
+3. Click "Create Key"
+4. Give it a name (e.g., "NyteBubo Agent")
 5. Copy and save the API key securely
 
 ### GitHub Personal Access Token
@@ -80,8 +80,11 @@ repositories:
   - "yourorg/another-repo"
   # Add all repositories you want to monitor
 
+# AI Model (optional - defaults to openrouter/auto)
+openrouter_model: "openrouter/auto"
+
 # Optional: Set credentials here (not recommended)
-# claude_api_key: ""
+# openrouter_api_key: ""
 # github_token: ""
 ```
 
@@ -98,7 +101,7 @@ repositories:
 
 2. Edit `.env` and add your credentials:
    ```bash
-   CLAUDE_API_KEY=sk-ant-...
+   OPENROUTER_API_KEY=sk-or-v1-...
    GITHUB_TOKEN=ghp_...
    ```
 
@@ -110,7 +113,7 @@ repositories:
 ### Option B: Export directly (Quick test)
 
 ```bash
-export CLAUDE_API_KEY="sk-ant-..."
+export OPENROUTER_API_KEY="sk-or-v1-..."
 export GITHUB_TOKEN="ghp_..."
 ```
 
@@ -127,7 +130,7 @@ After=network.target
 Type=simple
 User=your-user
 WorkingDirectory=/path/to/NyteBubo
-Environment="CLAUDE_API_KEY=sk-ant-..."
+Environment="OPENROUTER_API_KEY=sk-or-v1-..."
 Environment="GITHUB_TOKEN=ghp_..."
 ExecStart=/path/to/NyteBubo/nyte-bubo agent
 Restart=on-failure
@@ -219,13 +222,13 @@ journalctl -u nyte-bubo -f
 
 **Verify environment variables:**
 ```bash
-echo $CLAUDE_API_KEY
+echo $OPENROUTER_API_KEY
 echo $GITHUB_TOKEN
 ```
 
 **Check token permissions:**
 - GitHub token needs `repo` scope
-- Claude API key needs to be valid and have credits
+- OpenRouter API key needs to be valid and have credits
 
 ### Database errors
 
@@ -247,9 +250,10 @@ go build -o nyte-bubo
 ## Next Steps
 
 - Read the [README.md](README.md) for detailed information
-- Monitor the agent's behavior and adjust prompts in `internal/core/claude.go`
+- Monitor the agent's behavior and adjust prompts in `internal/core/openrouter.go`
 - Customize workflows in `internal/workflows/issue_to_pr.go`
 - Adjust poll interval in `config.yaml` based on your needs
+- Adjust AI model in `config.yaml` (default: `openrouter/auto`)
 - Add more repositories to monitor as needed
 
 ## Getting Help

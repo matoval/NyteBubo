@@ -109,9 +109,11 @@ docker run -d \
   --name nytebubo \
   -e OPENROUTER_API_KEY="your-openrouter-api-key" \
   -e GITHUB_TOKEN="your-github-personal-access-token" \
-  -v $(pwd):/data \
+  -v $(pwd):/root:Z \
   ghcr.io/matoval/nytebubo:latest
 ```
+
+**Note**: If you're on Fedora/RHEL with SELinux, add `:Z` to the volume mount as shown above.
 
 #### 4. View logs
 
@@ -184,6 +186,92 @@ Check token usage and costs for resolved issues:
 # Export to CSV
 ./nyte-bubo stats --export --file usage_stats.csv
 ```
+
+## Setting Up a GitHub Bot Account
+
+For best results, create a dedicated GitHub bot user instead of using your personal account.
+
+### Step 1: Create the Bot Account
+
+1. Log out of GitHub (or use a private browser window)
+2. Go to https://github.com/signup
+3. Create a new account with a bot-friendly name:
+   - `nytebubo-bot`
+   - `your-org-bot`
+   - `your-project-assistant`
+4. Complete signup and verify the email
+
+### Step 2: Generate Bot's Personal Access Token
+
+1. Log in as the **bot account**
+2. Go to https://github.com/settings/tokens
+3. Click **"Generate new token (classic)"**
+4. Configure the token:
+   - **Name**: `NyteBubo Agent Token`
+   - **Expiration**: No expiration (or 1 year)
+   - **Scopes**:
+     - ✅ `repo` (Full control - required)
+     - ✅ `workflow` (Optional - only if bot triggers workflows)
+5. Click **"Generate token"**
+6. **Copy the token** (format: `ghp_xxxx...`) - you won't see it again!
+
+### Step 3: Add Bot to Your Repositories
+
+For **each repository** you want the bot to monitor:
+
+1. Log in as **yourself** (repository owner)
+2. Go to the repository → **Settings** → **Collaborators**
+3. Click **"Add people"**
+4. Search for your bot account
+5. Select permission: **Write** (allows creating PRs and comments)
+6. Bot will receive an invitation
+
+### Step 4: Accept Invitations
+
+1. Log in as the **bot account**
+2. Check email or go to https://github.com/notifications
+3. Accept all repository invitations
+
+### Step 5: Update NyteBubo with Bot Token
+
+Use the **bot's token** (not your personal token):
+
+**Docker/Podman:**
+```bash
+podman run -d \
+  --name nytebubo \
+  -e OPENROUTER_API_KEY="your-key" \
+  -e GITHUB_TOKEN="ghp_BOT_TOKEN_HERE" \
+  -v $(pwd):/root:Z \
+  ghcr.io/matoval/nytebubo:latest
+```
+
+**From source:**
+```bash
+export GITHUB_TOKEN="ghp_BOT_TOKEN_HERE"
+./nyte-bubo agent
+```
+
+### Step 6: Test the Bot
+
+1. Create a new issue in your repository
+2. Assign the **bot account** to the issue (not yourself!)
+3. Wait up to 30 seconds for the next poll
+4. Bot should comment with its analysis
+
+**Expected output:**
+```
+👋 Hi! I've been assigned to this issue. Here's my understanding:
+
+[Bot's analysis]
+```
+
+### Why Use a Bot Account?
+
+✅ **Clear attribution** - PRs and comments clearly show they're from the bot
+✅ **Easy management** - Revoke access without affecting your personal account
+✅ **Professional** - Looks more polished in your repositories
+✅ **Security** - Bot has minimal permissions (only repos it needs)
 
 ## How It Works
 
