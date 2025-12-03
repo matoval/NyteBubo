@@ -97,6 +97,9 @@ poll_interval: 30  # Check every 30 seconds
 repositories:
   - "yourusername/your-repo"
   - "yourorg/another-repo"
+
+# AI Model (optional - defaults to openrouter/auto)
+openrouter_model: "openrouter/auto"
 ```
 
 #### 3. Run with Docker
@@ -106,7 +109,7 @@ docker run -d \
   --name nytebubo \
   -e OPENROUTER_API_KEY="your-openrouter-api-key" \
   -e GITHUB_TOKEN="your-github-personal-access-token" \
-  -v $(pwd):/root/.nytebubo \
+  -v $(pwd):/data \
   ghcr.io/matoval/nytebubo:latest
 ```
 
@@ -119,8 +122,10 @@ docker logs -f nytebubo
 #### 5. View usage statistics
 
 ```bash
-docker exec nytebubo ./nytebubo stats
+docker exec nytebubo nytebubo stats
 ```
+
+**Using Podman instead of Docker?** Replace `docker` with `podman` in all commands above.
 
 That's it! The agent is now running in a container and polling your repositories.
 

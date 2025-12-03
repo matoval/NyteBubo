@@ -24,17 +24,15 @@ FROM alpine:latest
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates sqlite-libs
 
-WORKDIR /root/
+# Copy the binary to /usr/local/bin
+COPY --from=builder /app/nytebubo /usr/local/bin/nytebubo
 
-# Copy the binary from builder
-COPY --from=builder /app/nytebubo .
-
-# Create directory for config and database
-RUN mkdir -p /root/.nytebubo
+# Set working directory for config and data
+WORKDIR /data
 
 # Expose port if webhook server is used
 EXPOSE 8080
 
 # Run the binary
-ENTRYPOINT ["./nytebubo"]
+ENTRYPOINT ["nytebubo"]
 CMD ["agent"]

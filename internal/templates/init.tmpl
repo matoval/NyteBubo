@@ -11,12 +11,17 @@ repositories:
   - "owner/repo"  # Add repositories to monitor (format: "owner/repo")
   # - "owner/another-repo"
 
+# AI Model configuration (optional)
+# Default: "openrouter/auto" - automatically picks the best model for each task
+# Or specify a model like "anthropic/claude-3.7-sonnet", "anthropic/claude-3.5-sonnet", etc.
+openrouter_model: "openrouter/auto"
+
 # Security: Set credentials via environment variables (recommended)
-# CLAUDE_API_KEY - Your Anthropic Claude API key
+# OPENROUTER_API_KEY - Your OpenRouter API key (get one at https://openrouter.ai/keys)
 # GITHUB_TOKEN - Your GitHub Personal Access Token
 
 # Alternatively, you can set them here (not recommended for production)
-# claude_api_key: ""
+# openrouter_api_key: ""
 # github_token: ""
 
 # Optional: Webhook mode (requires public endpoint)
