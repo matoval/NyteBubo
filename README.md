@@ -1,6 +1,6 @@
 # NyteBubo
 
-An AI-powered GitHub agent that runs on your local server, automatically analyzing assigned issues and creating pull requests using Claude AI.
+An AI-powered GitHub agent that runs on your local server, automatically analyzing assigned issues and creating pull requests using Claude AI via OpenRouter.
 
 ## Overview
 
@@ -15,9 +15,9 @@ NyteBubo is a focused polling agent that monitors GitHub repositories for issue 
 
 - **No Public Endpoint Required**: Runs entirely on your local/home server using polling
 - **Polling Architecture**: Checks for assigned issues every 30 seconds (configurable)
-- **Claude AI Integration**: Uses Anthropic's Claude for intelligent code generation
+- **Claude AI Integration**: Uses Claude AI via OpenRouter for intelligent code generation
 - **Token Usage Tracking**: Tracks API usage and costs per issue
-- **Cost Estimation**: Real-time cost estimates based on Claude 3.7 Sonnet pricing
+- **Real-Time Cost Tracking**: Actual costs from OpenRouter API
 - **Export to CSV**: Export usage statistics for analysis
 - **Persistent State Management**: SQLite database tracks conversation history and usage
 - **Simple Configuration**: YAML config and environment variables
@@ -28,13 +28,13 @@ NyteBubo is a focused polling agent that monitors GitHub repositories for issue 
 ### For Docker (Recommended)
 - Docker installed
 - GitHub account with repository access
-- Anthropic Claude API key
+- OpenRouter API key
 - GitHub Personal Access Token with repo permissions
 
 ### For Building from Source
 - Go 1.22 or higher
 - GitHub account with repository access
-- Anthropic Claude API key
+- OpenRouter API key
 - GitHub Personal Access Token with repo permissions
 
 ## Installation
@@ -104,7 +104,7 @@ repositories:
 ```bash
 docker run -d \
   --name nytebubo \
-  -e CLAUDE_API_KEY="your-claude-api-key" \
+  -e OPENROUTER_API_KEY="your-openrouter-api-key" \
   -e GITHUB_TOKEN="your-github-personal-access-token" \
   -v $(pwd):/root/.nytebubo \
   ghcr.io/matoval/nytebubo:latest
@@ -154,7 +154,7 @@ repositories:
 For security, set your API credentials as environment variables:
 
 ```bash
-export CLAUDE_API_KEY="your-claude-api-key"
+export OPENROUTER_API_KEY="your-openrouter-api-key"
 export GITHUB_TOKEN="your-github-personal-access-token"
 ```
 
@@ -268,7 +268,7 @@ NyteBubo/
 │   │   └── init.go        # Config file generation
 │   ├── core/              # Core functionality
 │   │   ├── github.go      # GitHub API client
-│   │   ├── claude.go      # Claude AI client
+│   │   ├── openrouter.go  # OpenRouter API client
 │   │   └── state.go       # State management
 │   ├── types/             # Type definitions
 │   │   └── config.go      # Configuration types
@@ -300,7 +300,7 @@ repositories:
   - "owner/another-repo"
 
 # Optional: Set credentials here (not recommended - use env vars instead)
-# claude_api_key: ""
+# openrouter_api_key: ""
 # github_token: ""
 
 # Optional: Webhook mode (requires public endpoint)
@@ -313,7 +313,7 @@ repositories:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `CLAUDE_API_KEY` | Your Anthropic Claude API key | Yes |
+| `OPENROUTER_API_KEY` | Your OpenRouter API key | Yes |
 | `GITHUB_TOKEN` | GitHub Personal Access Token with repo access | Yes |
 
 ### Webhook Mode (Optional)
@@ -329,14 +329,14 @@ Polling mode is recommended for home servers.
 
 ## Token Usage Tracking
 
-NyteBubo automatically tracks Claude API token usage and costs for every issue it processes.
+NyteBubo automatically tracks OpenRouter API token usage and costs for every issue it processes.
 
 ### Real-time Logging
 
 During operation, the agent logs token usage for each API call:
 
 ```
-📊 Claude API - Input: 1,245 | Output: 856 | Total: 2,101 tokens | Cost: $0.0162
+📊 OpenRouter API - Input: 1,245 | Output: 856 | Total: 2,101 tokens | Cost: $0.0162
 ```
 
 ### Usage Statistics Command
@@ -379,16 +379,18 @@ Export statistics to a CSV file for further analysis:
 The CSV includes:
 - Repository and issue details
 - Token counts (input, output, total)
-- Estimated costs
+- Actual costs
 - Issue status and timestamps
 
-### Cost Estimation
+### Cost Tracking
 
-Costs are estimated based on Claude 3.7 Sonnet pricing (as of January 2025):
-- **Input tokens**: $3.00 per million tokens
-- **Output tokens**: $15.00 per million tokens
+NyteBubo retrieves **actual costs** from OpenRouter's API via the `X-OpenRouter-Generation-Cost` response header. This provides:
 
-**Note**: These are estimates. Actual costs may vary. Check your Anthropic billing for precise charges.
+- ✅ **Accurate billing data** - Real costs, not approximations
+- ✅ **Model-specific pricing** - Correct costs even when using `openrouter/auto`
+- ✅ **Real-time tracking** - See actual costs as requests happen
+
+Check your OpenRouter billing dashboard for complete cost history and analytics.
 
 ## Security Best Practices
 
@@ -409,10 +411,10 @@ The agent uses the following GitHub API endpoints:
 - Get and update file contents
 - List PR comments
 
-### Claude AI API
+### OpenRouter API
 
-The agent uses Claude 3.7 Sonnet Latest model with:
-- Conversational message API
+The agent uses Claude 3.7 Sonnet model via OpenRouter with:
+- OpenAI-compatible chat completions API
 - System prompts for context
 - Multi-turn conversations for clarification
 - Code generation capabilities
@@ -432,7 +434,7 @@ The agent uses Claude 3.7 Sonnet Latest model with:
 1. Check server logs for errors
 2. Verify API credentials are set correctly
 3. Check `agent_state.db` for conversation state
-4. Ensure Claude API key has sufficient quota
+4. Ensure OpenRouter API key has sufficient quota
 
 ### Build errors
 
@@ -475,6 +477,6 @@ Contributions are welcome! Please:
 ## Acknowledgments
 
 - Built with [Cobra](https://github.com/spf13/cobra) for CLI
-- Powered by [Claude AI](https://www.anthropic.com/claude) from Anthropic
+- Powered by [Claude AI](https://www.anthropic.com/claude) via [OpenRouter](https://openrouter.ai/)
 - GitHub integration via [go-github](https://github.com/google/go-github)
 - State management with [SQLite](https://modernc.org/sqlite)

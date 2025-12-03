@@ -58,7 +58,7 @@ func RunInitPrompt() {
 
 Next steps:
   1. Set your environment variables:
-     export CLAUDE_API_KEY="your-api-key"
+     export OPENROUTER_API_KEY="your-api-key"
      export GITHUB_TOKEN="your-github-token"
      export WEBHOOK_SECRET="your-webhook-secret"
 

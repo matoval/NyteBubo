@@ -145,7 +145,7 @@ func exportToCSV(states []core.State, filename string) error {
 		"Input Tokens",
 		"Output Tokens",
 		"Total Tokens",
-		"Estimated Cost",
+		"Cost",
 		"Created At",
 		"Updated At",
 		"Completed At",

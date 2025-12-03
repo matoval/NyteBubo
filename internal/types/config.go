@@ -7,12 +7,13 @@ import (
 
 // Config represents the agent configuration
 type Config struct {
-	WorkingDir       string   `yaml:"working_dir"`
-	StateDBPath      string   `yaml:"state_db_path"`
-	ClaudeAPIKey     string   `yaml:"claude_api_key,omitempty"`
-	GitHubToken      string   `yaml:"github_token,omitempty"`
-	PollInterval     int      `yaml:"poll_interval"` // in seconds
-	Repositories     []string `yaml:"repositories"`  // List of repositories to monitor (format: "owner/repo")
+	WorkingDir        string   `yaml:"working_dir"`
+	StateDBPath       string   `yaml:"state_db_path"`
+	OpenRouterAPIKey  string   `yaml:"openrouter_api_key,omitempty"`
+	OpenRouterModel   string   `yaml:"openrouter_model,omitempty"` // Model to use (default: "openrouter/auto")
+	GitHubToken       string   `yaml:"github_token,omitempty"`
+	PollInterval      int      `yaml:"poll_interval"` // in seconds
+	Repositories      []string `yaml:"repositories"`  // List of repositories to monitor (format: "owner/repo")
 
 	// Webhook mode (optional, deprecated)
 	ServerPort    int    `yaml:"server_port,omitempty"`
@@ -36,7 +37,13 @@ func (c Config) Display() string {
 
 	b.WriteString(fmt.Sprintf("  Working Dir:     %s\n", c.WorkingDir))
 	b.WriteString(fmt.Sprintf("  State DB:        %s\n", c.StateDBPath))
-	b.WriteString(fmt.Sprintf("  Claude API Key:  %s\n", maskSecret(c.ClaudeAPIKey)))
+	b.WriteString(fmt.Sprintf("  OpenRouter Key:  %s\n", maskSecret(c.OpenRouterAPIKey)))
+
+	model := c.OpenRouterModel
+	if model == "" {
+		model = "openrouter/auto (default)"
+	}
+	b.WriteString(fmt.Sprintf("  AI Model:        %s\n", model))
 	b.WriteString(fmt.Sprintf("  GitHub Token:    %s\n", maskSecret(c.GitHubToken)))
 	b.WriteString("\n")
 	return b.String()

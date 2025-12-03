@@ -18,9 +18,9 @@ type IssueAgent struct {
 }
 
 // NewIssueAgent creates a new issue agent
-func NewIssueAgent(githubToken, claudeAPIKey, stateDBPath, workingDir string) (*IssueAgent, error) {
+func NewIssueAgent(githubToken, claudeAPIKey, model, stateDBPath, workingDir string) (*IssueAgent, error) {
 	github := core.NewGitHubClient(githubToken)
-	claude := core.NewClaudeAgent(claudeAPIKey)
+	claude := core.NewClaudeAgent(claudeAPIKey, model)
 
 	stateManager, err := core.NewStateManager(stateDBPath)
 	if err != nil {
@@ -72,7 +72,7 @@ func (ia *IssueAgent) HandleIssueAssignment(owner, repo string, issueNumber int)
 	// Track token usage
 	state.TotalInputTokens += usage.InputTokens
 	state.TotalOutputTokens += usage.OutputTokens
-	state.TotalCost += usage.EstimatedCost
+	state.TotalCost += usage.Cost
 
 	// Update conversation history
 	state.Conversation = append(state.Conversation, core.AgentMessage{
@@ -137,7 +137,7 @@ func (ia *IssueAgent) HandleIssueComment(owner, repo string, issueNumber int, co
 	// Track token usage
 	state.TotalInputTokens += usage.InputTokens
 	state.TotalOutputTokens += usage.OutputTokens
-	state.TotalCost += usage.EstimatedCost
+	state.TotalCost += usage.Cost
 
 	// Update conversation
 	state.Conversation = append(state.Conversation, core.AgentMessage{
@@ -223,7 +223,7 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 	// Track token usage
 	state.TotalInputTokens += usage.InputTokens
 	state.TotalOutputTokens += usage.OutputTokens
-	state.TotalCost += usage.EstimatedCost
+	state.TotalCost += usage.Cost
 
 	// Parse the code response and extract file changes
 	fileChanges := parseCodeChanges(codeResponse)
@@ -308,7 +308,7 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 	// Track token usage
 	state.TotalInputTokens += usage.InputTokens
 	state.TotalOutputTokens += usage.OutputTokens
-	state.TotalCost += usage.EstimatedCost
+	state.TotalCost += usage.Cost
 
 	// Update conversation
 	state.Conversation = append(state.Conversation, core.AgentMessage{

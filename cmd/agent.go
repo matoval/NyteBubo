@@ -57,12 +57,12 @@ func runAgent(cmd *cobra.Command, args []string) {
 	}
 
 	// Get credentials from environment variables (preferred) or config file
-	claudeAPIKey := os.Getenv("CLAUDE_API_KEY")
-	if claudeAPIKey == "" && config.ClaudeAPIKey == "" {
-		log.Fatal("CLAUDE_API_KEY environment variable is not set and not found in config.yaml")
+	openRouterAPIKey := os.Getenv("OPENROUTER_API_KEY")
+	if openRouterAPIKey == "" && config.OpenRouterAPIKey == "" {
+		log.Fatal("OPENROUTER_API_KEY environment variable is not set and not found in config.yaml")
 	}
-	if claudeAPIKey == "" {
-		claudeAPIKey = config.ClaudeAPIKey
+	if openRouterAPIKey == "" {
+		openRouterAPIKey = config.OpenRouterAPIKey
 	}
 
 	githubToken := os.Getenv("GITHUB_TOKEN")
@@ -74,7 +74,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 	}
 
 	// Create the issue agent
-	agent, err := workflows.NewIssueAgent(githubToken, claudeAPIKey, config.StateDBPath, config.WorkingDir)
+	agent, err := workflows.NewIssueAgent(githubToken, openRouterAPIKey, config.OpenRouterModel, config.StateDBPath, config.WorkingDir)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
