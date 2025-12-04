@@ -52,7 +52,7 @@ func (ia *IssueAgent) HandleIssueAssignment(owner, repo string, issueNumber int)
 		return fmt.Errorf("failed to get state: %w", err)
 	}
 
-	// If no state, create a new one
+	// If no state, create a new one and load existing conversation from GitHub
 	if state == nil {
 		state = &core.State{
 			Owner:       owner,
@@ -61,14 +61,65 @@ func (ia *IssueAgent) HandleIssueAssignment(owner, repo string, issueNumber int)
 			Status:      "analyzing",
 			Conversation: []core.AgentMessage{},
 		}
+
+		// Fetch existing comments to build conversation history
+		fmt.Printf("📥 Fetching existing comments from GitHub to build context...\n")
+		comments, err := ia.github.ListIssueComments(owner, repo, issueNumber)
+		if err != nil {
+			fmt.Printf("⚠️  Warning: failed to fetch existing comments: %v\n", err)
+		} else if len(comments) > 0 {
+			fmt.Printf("📚 Found %d existing comment(s) to add to context\n", len(comments))
+		}
+
+		// Build conversation from issue description and comments
+		title := issue.GetTitle()
+		body := issue.GetBody()
+
+		state.Conversation = append(state.Conversation, core.AgentMessage{
+			Role:    "user",
+			Content: fmt.Sprintf("Issue Title: %s\n\nIssue Description:\n%s", title, body),
+		})
+
+		// Add existing comments to conversation
+		botUsername, err := ia.github.GetAuthenticatedUser()
+		if err == nil && len(comments) > 0 {
+			for _, comment := range comments {
+				isBot := comment.GetUser().GetLogin() == botUsername.GetLogin()
+				role := "user"
+				if isBot {
+					role = "assistant"
+				}
+				state.Conversation = append(state.Conversation, core.AgentMessage{
+					Role:    role,
+					Content: comment.GetBody(),
+				})
+			}
+		}
 	}
 
-	// Analyze the issue with Claude
+	// Analyze with full context
+	fmt.Printf("🤖 Sending issue to AI for analysis (with %d message(s) of context)...\n", len(state.Conversation))
+
 	title := issue.GetTitle()
 	body := issue.GetBody()
 
-	fmt.Printf("🤖 Sending issue to AI for analysis...\n")
-	response, usage, err := ia.claude.AnalyzeIssue(title, body)
+	var response string
+	var usage core.TokenUsage
+
+	// If we have existing conversation, use it
+	if len(state.Conversation) > 1 {
+		// Already has conversation history, ask AI to confirm understanding
+		systemPrompt := "You are a helpful coding assistant. Review the entire conversation and determine if you have enough information to proceed with implementation. If you do, say so clearly. If not, ask specific clarifying questions."
+		response, usage, err = ia.claude.SendMessage(state.Conversation, systemPrompt)
+	} else {
+		// Fresh issue, analyze it
+		response, usage, err = ia.claude.AnalyzeIssue(title, body)
+		state.Conversation = append(state.Conversation, core.AgentMessage{
+			Role:    "assistant",
+			Content: response,
+		})
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to analyze issue: %w", err)
 	}
@@ -79,24 +130,36 @@ func (ia *IssueAgent) HandleIssueAssignment(owner, repo string, issueNumber int)
 	state.TotalOutputTokens += usage.OutputTokens
 	state.TotalCost += usage.Cost
 
-	// Update conversation history
-	state.Conversation = append(state.Conversation, core.AgentMessage{
-		Role:    "user",
-		Content: fmt.Sprintf("Issue Title: %s\n\nIssue Description:\n%s", title, body),
-	})
-	state.Conversation = append(state.Conversation, core.AgentMessage{
-		Role:    "assistant",
-		Content: response,
-	})
+	// Add AI response to conversation if not already there
+	if len(state.Conversation) > 0 && state.Conversation[len(state.Conversation)-1].Content != response {
+		state.Conversation = append(state.Conversation, core.AgentMessage{
+			Role:    "assistant",
+			Content: response,
+		})
+	}
 
-	// Post the analysis as a comment
-	commentBody := fmt.Sprintf("👋 Hi! I've been assigned to this issue. Here's my understanding:\n\n%s", response)
-	if err := ia.github.CreateIssueComment(owner, repo, issueNumber, commentBody); err != nil {
-		return fmt.Errorf("failed to create comment: %w", err)
+	// Post the analysis as a comment (only if it's actually new analysis, not just reviewing existing conversation)
+	shouldComment := len(state.Conversation) <= 2 // Only the initial issue and bot response
+
+	// Check if response indicates readiness without asking questions
+	lowerResponse := strings.ToLower(response)
+	isAskingQuestion := strings.Contains(lowerResponse, "question?") ||
+		strings.Contains(lowerResponse, "questions:") ||
+		strings.Contains(lowerResponse, "could you clarify") ||
+		strings.Contains(lowerResponse, "can you clarify") ||
+		strings.Contains(lowerResponse, "please clarify") ||
+		strings.Contains(lowerResponse, "need clarification") ||
+		strings.HasSuffix(lowerResponse, "?")
+
+	if shouldComment {
+		commentBody := fmt.Sprintf("👋 Hi! I've been assigned to this issue. Here's my understanding:\n\n%s", response)
+		if err := ia.github.CreateIssueComment(owner, repo, issueNumber, commentBody); err != nil {
+			return fmt.Errorf("failed to create comment: %w", err)
+		}
 	}
 
 	// Determine next status based on response
-	if strings.Contains(strings.ToLower(response), "question") || strings.Contains(strings.ToLower(response), "clarif") {
+	if isAskingQuestion {
 		state.Status = "waiting_for_clarification"
 	} else {
 		state.Status = "ready_to_implement"
