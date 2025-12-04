@@ -11,8 +11,7 @@
 SETUP.md
 
 # Build artifacts
-nyte-bubo
-NyteBubo
+nytebubo
 
 # SQLite databases
 *.db

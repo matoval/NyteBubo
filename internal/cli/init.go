@@ -63,7 +63,7 @@ Next steps:
      export WEBHOOK_SECRET="your-webhook-secret"
 
   2. Start the agent:
-     nyte-bubo agent
+     nytebubo agent
 
   3. Configure your GitHub repository webhook to point to:
      http://your-server:8080/webhook

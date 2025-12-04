@@ -9,6 +9,13 @@ import (
 	"github.com/google/go-github/v63/github"
 )
 
+// PollerHandlers contains callbacks for different event types
+type PollerHandlers struct {
+	HandleIssue        func(owner, repo string, issueNumber int) error
+	HandleIssueComment func(owner, repo string, issueNumber int, commentBody string) error
+	HandlePRComment    func(owner, repo string, prNumber int, commentBody string) error
+}
+
 // Poller polls GitHub for assigned issues and triggers workflows
 type Poller struct {
 	github       *GitHubClient
@@ -42,7 +49,7 @@ func NewPoller(github *GitHubClient, stateManager *StateManager, config PollerCo
 }
 
 // Start begins polling for assigned issues
-func (p *Poller) Start(handleIssue func(owner, repo string, issueNumber int) error) error {
+func (p *Poller) Start(handlers PollerHandlers) error {
 	log.Printf("Starting poller for user: %s", p.username)
 	log.Printf("Monitoring repositories: %v", p.repositories)
 	log.Printf("Poll interval: %v", p.pollInterval)
@@ -51,13 +58,13 @@ func (p *Poller) Start(handleIssue func(owner, repo string, issueNumber int) err
 	defer ticker.Stop()
 
 	// Do an initial poll immediately
-	if err := p.poll(handleIssue); err != nil {
+	if err := p.poll(handlers); err != nil {
 		log.Printf("Error during initial poll: %v", err)
 	}
 
 	// Then poll at intervals
 	for range ticker.C {
-		if err := p.poll(handleIssue); err != nil {
+		if err := p.poll(handlers); err != nil {
 			log.Printf("Error during poll: %v", err)
 		}
 	}
@@ -66,7 +73,7 @@ func (p *Poller) Start(handleIssue func(owner, repo string, issueNumber int) err
 }
 
 // poll checks for new assigned issues and processes them
-func (p *Poller) poll(handleIssue func(owner, repo string, issueNumber int) error) error {
+func (p *Poller) poll(handlers PollerHandlers) error {
 	log.Printf("Polling for assigned issues...")
 
 	for _, repoFullName := range p.repositories {
@@ -89,7 +96,7 @@ func (p *Poller) poll(handleIssue func(owner, repo string, issueNumber int) erro
 
 		// Process each issue
 		for _, issue := range issues {
-			if err := p.processIssue(owner, repo, issue, handleIssue); err != nil {
+			if err := p.processIssue(owner, repo, issue, handlers); err != nil {
 				log.Printf("Error processing issue #%d in %s: %v", issue.GetNumber(), repoFullName, err)
 			}
 		}
@@ -99,7 +106,7 @@ func (p *Poller) poll(handleIssue func(owner, repo string, issueNumber int) erro
 }
 
 // processIssue checks if an issue needs to be processed and handles it
-func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handleIssue func(owner, repo string, issueNumber int) error) error {
+func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers PollerHandlers) error {
 	issueNumber := issue.GetNumber()
 
 	// Check if we've already processed this issue
@@ -111,34 +118,50 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handleIss
 	// If we have no state for this issue, it's new - process it
 	if state == nil {
 		log.Printf("New issue detected: %s/%s #%d - %s", owner, repo, issueNumber, issue.GetTitle())
-		return handleIssue(owner, repo, issueNumber)
+		if handlers.HandleIssue != nil {
+			return handlers.HandleIssue(owner, repo, issueNumber)
+		}
+		return nil
 	}
 
 	// If we have state, check if there are new comments we need to process
 	if state.Status == "waiting_for_clarification" {
-		hasNewComments, err := p.checkForNewComments(owner, repo, issueNumber, state)
+		newComments, err := p.getNewComments(owner, repo, issueNumber, state)
 		if err != nil {
 			return fmt.Errorf("failed to check for new comments: %w", err)
 		}
 
-		if hasNewComments {
-			log.Printf("New comments detected on issue %s/%s #%d", owner, repo, issueNumber)
-			// We'll need to handle this in the workflow layer
-			// For now, just log it - the workflow will need to be updated to handle polling
+		if len(newComments) > 0 {
+			log.Printf("New comments detected on issue %s/%s #%d - processing %d comment(s)", owner, repo, issueNumber, len(newComments))
+			// Process each new comment
+			for _, comment := range newComments {
+				if handlers.HandleIssueComment != nil {
+					if err := handlers.HandleIssueComment(owner, repo, issueNumber, comment.GetBody()); err != nil {
+						log.Printf("Error handling comment on issue #%d: %v", issueNumber, err)
+					}
+				}
+			}
 		}
 	}
 
 	// Check if there are new PR review comments
 	if state.Status == "pr_created" || state.Status == "reviewing" {
 		if state.PRNumber != nil {
-			hasNewReviewComments, err := p.checkForNewPRComments(owner, repo, *state.PRNumber, state)
+			newReviewComments, err := p.getNewPRComments(owner, repo, *state.PRNumber, state)
 			if err != nil {
 				return fmt.Errorf("failed to check for new PR comments: %w", err)
 			}
 
-			if hasNewReviewComments {
-				log.Printf("New PR review comments detected on %s/%s #%d", owner, repo, *state.PRNumber)
-				// We'll need to handle this in the workflow layer
+			if len(newReviewComments) > 0 {
+				log.Printf("New PR review comments detected on %s/%s #%d - processing %d comment(s)", owner, repo, *state.PRNumber, len(newReviewComments))
+				// Process each new PR comment
+				for _, comment := range newReviewComments {
+					if handlers.HandlePRComment != nil {
+						if err := handlers.HandlePRComment(owner, repo, *state.PRNumber, comment.GetBody()); err != nil {
+							log.Printf("Error handling PR comment on #%d: %v", *state.PRNumber, err)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -146,46 +169,42 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handleIss
 	return nil
 }
 
-// checkForNewComments checks if there are new comments since last processing
-func (p *Poller) checkForNewComments(owner, repo string, issueNumber int, state *State) (bool, error) {
+// getNewComments returns new comments since last processing
+func (p *Poller) getNewComments(owner, repo string, issueNumber int, state *State) ([]*github.IssueComment, error) {
 	comments, err := p.github.ListIssueComments(owner, repo, issueNumber)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	// Filter out bot's own comments and check for new user comments
+	var newComments []*github.IssueComment
+
+	// Filter out bot's own comments and get new user comments
 	for _, comment := range comments {
 		// Skip if it's the bot's own comment
 		if comment.GetUser().GetLogin() == p.username {
 			continue
 		}
 
-		// Check if this comment was made after our last conversation update
-		commentTime := comment.GetCreatedAt().Time
-
-		// Simple check: if there are more comments than conversation messages, there are new ones
-		// This is a simple heuristic - in production you'd want to track last processed comment ID
-		if len(comments) > len(state.Conversation) {
-			return true, nil
-		}
-
 		// Check if comment is newer than state update
+		commentTime := comment.GetCreatedAt().Time
 		if commentTime.After(state.UpdatedAt) {
-			return true, nil
+			newComments = append(newComments, comment)
 		}
 	}
 
-	return false, nil
+	return newComments, nil
 }
 
-// checkForNewPRComments checks if there are new PR review comments since last processing
-func (p *Poller) checkForNewPRComments(owner, repo string, prNumber int, state *State) (bool, error) {
+// getNewPRComments returns new PR review comments since last processing
+func (p *Poller) getNewPRComments(owner, repo string, prNumber int, state *State) ([]*github.PullRequestComment, error) {
 	comments, err := p.github.ListPRComments(owner, repo, prNumber)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	// Filter out bot's own comments and check for new review comments
+	var newComments []*github.PullRequestComment
+
+	// Filter out bot's own comments and get new review comments
 	for _, comment := range comments {
 		// Skip if it's the bot's own comment
 		if comment.GetUser().GetLogin() == p.username {
@@ -195,9 +214,9 @@ func (p *Poller) checkForNewPRComments(owner, repo string, prNumber int, state *
 		// Check if comment is newer than state update
 		commentTime := comment.GetCreatedAt().Time
 		if commentTime.After(state.UpdatedAt) {
-			return true, nil
+			newComments = append(newComments, comment)
 		}
 	}
 
-	return false, nil
+	return newComments, nil
 }

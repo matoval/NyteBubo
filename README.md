@@ -54,7 +54,7 @@ No build tools required! Skip to [Quick Start with Docker](#quick-start-with-doc
 ```bash
 git clone https://github.com/matoval/NyteBubo.git
 cd NyteBubo
-go build -o nyte-bubo
+go build -o nytebubo
 ```
 
 **Or build your own Docker image:**
@@ -77,20 +77,20 @@ go install github.com/matoval/NyteBubo@latest
 
 If you're using Docker, follow these steps:
 
-#### 1. Create a configuration directory
+#### 1. Create data directory with config
 
 ```bash
-mkdir -p nytebubo-config
-cd nytebubo-config
+mkdir -p data
+cd data
 ```
 
 #### 2. Create config.yaml
 
-Create a `config.yaml` file in the directory:
+Create a `config.yaml` file in the `data` directory:
 
 ```yaml
-working_dir: "./workspace"
-state_db_path: "./agent_state.db"
+working_dir: "/data/workspace"
+state_db_path: "/data/agent_state.db"
 
 # Polling configuration
 poll_interval: 30  # Check every 30 seconds
@@ -102,18 +102,24 @@ repositories:
 openrouter_model: "qwen/qwen3-coder:free"
 ```
 
+**Note:** Use absolute paths (`/data/...`) since the container's working directory is `/data`.
+
 #### 3. Run with Docker
 
 ```bash
+cd ..  # Go back to parent directory
 docker run -d \
   --name nytebubo \
   -e OPENROUTER_API_KEY="your-openrouter-api-key" \
   -e GITHUB_TOKEN="your-github-personal-access-token" \
-  -v $(pwd):/root:Z \
+  -v $(pwd)/data:/data:Z \
   ghcr.io/matoval/nytebubo:latest
 ```
 
-**Note**: If you're on Fedora/RHEL with SELinux, add `:Z` to the volume mount as shown above.
+**Why this setup?**
+- All persistent data (config, database, workspace) lives in `./data`
+- The database survives container deletions and restarts
+- `:Z` suffix - Required for SELinux (Fedora/RHEL). Omit on other systems.
 
 #### 4. View logs
 
@@ -140,7 +146,7 @@ If you built from source or installed the binary:
 Create a `config.yaml` file:
 
 ```bash
-./nyte-bubo init
+./nytebubo init
 ```
 
 Edit `config.yaml` and add your repositories:
@@ -168,7 +174,7 @@ export GITHUB_TOKEN="your-github-personal-access-token"
 #### 3. Start the Agent
 
 ```bash
-./nyte-bubo agent
+./nytebubo agent
 ```
 
 The agent will start polling the specified repositories every 30 seconds for assigned issues.
@@ -181,10 +187,10 @@ Check token usage and costs for resolved issues:
 
 ```bash
 # View stats in terminal
-./nyte-bubo stats
+./nytebubo stats
 
 # Export to CSV
-./nyte-bubo stats --export --file usage_stats.csv
+./nytebubo stats --export --file usage_stats.csv
 ```
 
 ## Setting Up a GitHub Bot Account
@@ -249,7 +255,7 @@ podman run -d \
 **From source:**
 ```bash
 export GITHUB_TOKEN="ghp_BOT_TOKEN_HERE"
-./nyte-bubo agent
+./nytebubo agent
 ```
 
 ### Step 6: Test the Bot
@@ -437,7 +443,7 @@ During operation, the agent logs token usage for each API call:
 View comprehensive statistics for all processed issues:
 
 ```bash
-./nyte-bubo stats
+./nytebubo stats
 ```
 
 Example output:
@@ -466,7 +472,7 @@ TOTAL                                  9126           5577  $ 0.1112
 Export statistics to a CSV file for further analysis:
 
 ```bash
-./nyte-bubo stats --export --file usage_stats.csv
+./nytebubo stats --export --file usage_stats.csv
 ```
 
 The CSV includes:
@@ -529,13 +535,48 @@ The agent uses Claude 3.7 Sonnet model via OpenRouter with:
 3. Check `agent_state.db` for conversation state
 4. Ensure OpenRouter API key has sufficient quota
 
+### Database Management
+
+**Reset the database** (clears all issue states and conversation history):
+
+```bash
+# For local installation
+rm agent_state.db
+
+# For Docker/Podman
+rm data/agent_state.db
+# Then restart the container
+docker restart nytebubo
+```
+
+**View database statistics**:
+
+```bash
+# For local installation
+nytebubo stats
+
+# For Docker/Podman
+docker exec nytebubo nytebubo stats
+```
+
+**When to reset the database:**
+- Agent is stuck on an old issue
+- Conversation history is corrupted
+- Want to start fresh after testing
+- After major configuration changes
+
+**Note:** The database is persistent across container restarts. It only gets deleted if you:
+1. Manually delete `data/agent_state.db`
+2. Delete the `data` directory
+3. Remove the volume mount
+
 ### Build errors
 
 ```bash
 # Clean and rebuild
 go clean
 go mod tidy
-go build -o nyte-bubo
+go build -o nytebubo
 ```
 
 ## Development

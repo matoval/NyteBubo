@@ -53,10 +53,10 @@ cd NyteBubo
 go mod download
 
 # Build the binary
-go build -o nyte-bubo
+go build -o nytebubo
 
 # Verify the build
-./nyte-bubo --help
+./nytebubo --help
 ```
 
 ## Step 3: Create Configuration
@@ -64,7 +64,7 @@ go build -o nyte-bubo
 Create and configure your `config.yaml`:
 
 ```bash
-./nyte-bubo init
+./nytebubo init
 ```
 
 Edit the generated `config.yaml` and add your repositories:
@@ -119,7 +119,7 @@ export GITHUB_TOKEN="ghp_..."
 
 ### Option C: Systemd service (Production)
 
-Create `/etc/systemd/system/nyte-bubo.service`:
+Create `/etc/systemd/system/nytebubo.service`:
 
 ```ini
 [Unit]
@@ -132,7 +132,7 @@ User=your-user
 WorkingDirectory=/path/to/NyteBubo
 Environment="OPENROUTER_API_KEY=sk-or-v1-..."
 Environment="GITHUB_TOKEN=ghp_..."
-ExecStart=/path/to/NyteBubo/nyte-bubo agent
+ExecStart=/path/to/NyteBubo/nytebubo agent
 Restart=on-failure
 
 [Install]
@@ -142,14 +142,14 @@ WantedBy=multi-user.target
 Then:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable nyte-bubo
-sudo systemctl start nyte-bubo
+sudo systemctl enable nytebubo
+sudo systemctl start nytebubo
 ```
 
 ## Step 5: Start the Agent
 
 ```bash
-./nyte-bubo agent
+./nytebubo agent
 ```
 
 You should see:
@@ -205,10 +205,10 @@ This way:
 **Check agent logs:**
 ```bash
 # If running directly
-./nyte-bubo agent
+./nytebubo agent
 
 # If using systemd
-journalctl -u nyte-bubo -f
+journalctl -u nytebubo -f
 ```
 
 **Common issues:**
@@ -235,7 +235,7 @@ echo $GITHUB_TOKEN
 **Reset the state database:**
 ```bash
 rm agent_state.db
-./nyte-bubo agent
+./nytebubo agent
 ```
 
 ### Building errors
@@ -244,7 +244,7 @@ rm agent_state.db
 ```bash
 go clean
 go mod tidy
-go build -o nyte-bubo
+go build -o nytebubo
 ```
 
 ## Next Steps

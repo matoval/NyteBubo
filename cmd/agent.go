@@ -47,7 +47,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to parse config.yaml: %v", err)
 		}
 	} else {
-		log.Println("No config.yaml found, using defaults. Run 'nyte-bubo init' to create one.")
+		log.Println("No config.yaml found, using defaults. Run 'nytebubo init' to create one.")
 		log.Fatal("Error: repositories list is required. Please create a config.yaml file.")
 	}
 
