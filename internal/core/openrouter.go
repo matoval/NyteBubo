@@ -241,12 +241,32 @@ Repository Context: %s
 
 Your task: %s
 
-Provide:
-1. The specific code changes needed
-2. File paths where changes should be made
-3. Clear explanations of your approach
+IMPORTANT - File Format Requirements:
+You MUST format each file change using this EXACT format:
 
-Format your response with clear sections for each file that needs to be modified.`, language, context, task)
+` + "```" + `markdown path/to/file.md
+file content here
+` + "```" + `
+
+For example:
+` + "```" + `markdown README.md
+# My Project
+This is a README file
+` + "```" + `
+
+` + "```" + `python src/main.py
+def hello():
+    print("Hello World")
+` + "```" + `
+
+Rules:
+1. Start code blocks with three backticks followed by the language name and a space, then the file path
+2. Put the complete file content inside the code block
+3. End with three backticks
+4. Use one code block per file
+5. The file path should be relative to the repository root
+
+Do NOT use any other format. This format is required for automatic file processing.`, language, context, task)
 
 	return ca.SendMessage(conversationHistory, systemPrompt)
 }

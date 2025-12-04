@@ -385,17 +385,33 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 	// Parse the code response and extract file changes
 	fileChanges := parseCodeChanges(codeResponse)
 
-	// Apply the changes to the branch
-	if len(fileChanges) > 0 {
-		fmt.Printf("📝 Applying %d file change(s) to branch %s\n", len(fileChanges), branchName)
-		for filePath, content := range fileChanges {
-			fmt.Printf("  - Updating %s\n", filePath)
-			if err := ia.github.CreateOrUpdateFile(owner, repo, filePath, fmt.Sprintf("Update %s for issue #%d", filePath, issueNumber), content, branchName, nil); err != nil {
-				return fmt.Errorf("failed to update file %s: %w", filePath, err)
-			}
-		}
-	} else {
+	// Validate that we got file changes
+	if len(fileChanges) == 0 {
 		fmt.Printf("⚠️  Warning: No file changes detected from AI response\n")
+		fmt.Printf("📝 AI Response format was invalid. Posting response and requesting user review.\n")
+
+		// Post the AI's response as a comment for user to review
+		comment := fmt.Sprintf("⚠️ I attempted to implement this issue, but couldn't generate files in the correct format.\n\nHere's what I tried to generate:\n\n%s\n\n---\n\nCould you please review this and let me know if you need me to try again with different instructions?\n\n🤖 NyteBubo", codeResponse)
+		if err := ia.github.CreateIssueComment(owner, repo, issueNumber, comment); err != nil {
+			return fmt.Errorf("failed to create comment: %w", err)
+		}
+
+		// Reset status to waiting for clarification
+		state.Status = "waiting_for_clarification"
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		return nil
+	}
+
+	// Apply the changes to the branch
+	fmt.Printf("📝 Applying %d file change(s) to branch %s\n", len(fileChanges), branchName)
+	for filePath, content := range fileChanges {
+		fmt.Printf("  - Updating %s\n", filePath)
+		if err := ia.github.CreateOrUpdateFile(owner, repo, filePath, fmt.Sprintf("Update %s for issue #%d", filePath, issueNumber), content, branchName, nil); err != nil {
+			return fmt.Errorf("failed to update file %s: %w", filePath, err)
+		}
 	}
 
 	// Create PR or comment about direct commit
