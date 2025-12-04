@@ -98,8 +98,8 @@ repositories:
   - "yourusername/your-repo"
   - "yourorg/another-repo"
 
-# AI Model (optional - defaults to openrouter/auto)
-openrouter_model: "openrouter/auto"
+# AI Model (optional - defaults to qwen/qwen3-coder:free)
+openrouter_model: "qwen/qwen3-coder:free"
 ```
 
 #### 3. Run with Docker

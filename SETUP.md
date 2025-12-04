@@ -80,8 +80,8 @@ repositories:
   - "yourorg/another-repo"
   # Add all repositories you want to monitor
 
-# AI Model (optional - defaults to openrouter/auto)
-openrouter_model: "openrouter/auto"
+# AI Model (optional - defaults to qwen/qwen3-coder:free)
+openrouter_model: "qwen/qwen3-coder:free"
 
 # Optional: Set credentials here (not recommended)
 # openrouter_api_key: ""
@@ -253,7 +253,7 @@ go build -o nyte-bubo
 - Monitor the agent's behavior and adjust prompts in `internal/core/openrouter.go`
 - Customize workflows in `internal/workflows/issue_to_pr.go`
 - Adjust poll interval in `config.yaml` based on your needs
-- Adjust AI model in `config.yaml` (default: `openrouter/auto`)
+- Adjust AI model in `config.yaml` (default: `qwen/qwen3-coder:free` - best free coding model)
 - Add more repositories to monitor as needed
 
 ## Getting Help

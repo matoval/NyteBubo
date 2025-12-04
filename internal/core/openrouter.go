@@ -30,10 +30,10 @@ type ClaudeAgent struct {
 }
 
 // NewClaudeAgent creates a new OpenRouter API client
-// If model is empty, defaults to "openrouter/auto" for automatic model selection
+// If model is empty, defaults to "qwen/qwen3-coder:free" - best free coding model on OpenRouter
 func NewClaudeAgent(apiKey, model string) *ClaudeAgent {
 	if model == "" {
-		model = "openrouter/auto" // Let OpenRouter pick the best model for each request
+		model = "qwen/qwen3-coder:free" // Best free coding model on OpenRouter
 	}
 
 	return &ClaudeAgent{

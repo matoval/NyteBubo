@@ -10,7 +10,7 @@ type Config struct {
 	WorkingDir        string   `yaml:"working_dir"`
 	StateDBPath       string   `yaml:"state_db_path"`
 	OpenRouterAPIKey  string   `yaml:"openrouter_api_key,omitempty"`
-	OpenRouterModel   string   `yaml:"openrouter_model,omitempty"` // Model to use (default: "openrouter/auto")
+	OpenRouterModel   string   `yaml:"openrouter_model,omitempty"` // Model to use (default: "qwen/qwen3-coder:free")
 	GitHubToken       string   `yaml:"github_token,omitempty"`
 	PollInterval      int      `yaml:"poll_interval"` // in seconds
 	Repositories      []string `yaml:"repositories"`  // List of repositories to monitor (format: "owner/repo")
@@ -41,7 +41,7 @@ func (c Config) Display() string {
 
 	model := c.OpenRouterModel
 	if model == "" {
-		model = "openrouter/auto (default)"
+		model = "qwen/qwen3-coder:free (default)"
 	}
 	b.WriteString(fmt.Sprintf("  AI Model:        %s\n", model))
 	b.WriteString(fmt.Sprintf("  GitHub Token:    %s\n", maskSecret(c.GitHubToken)))

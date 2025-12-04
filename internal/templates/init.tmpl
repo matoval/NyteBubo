@@ -12,9 +12,10 @@ repositories:
   # - "owner/another-repo"
 
 # AI Model configuration (optional)
-# Default: "openrouter/auto" - automatically picks the best model for each task
-# Or specify a model like "anthropic/claude-3.7-sonnet", "anthropic/claude-3.5-sonnet", etc.
-openrouter_model: "openrouter/auto"
+# Default: "qwen/qwen3-coder:free" - Best free coding model on OpenRouter
+# Other options: "kwaipilot/kat-coder-pro:free", "minimax/minimax-m2:free"
+# Or use "openrouter/auto" to automatically pick the best model for each task
+openrouter_model: "qwen/qwen3-coder:free"
 
 # Security: Set credentials via environment variables (recommended)
 # OPENROUTER_API_KEY - Your OpenRouter API key (get one at https://openrouter.ai/keys)
