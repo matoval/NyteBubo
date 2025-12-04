@@ -161,7 +161,16 @@ func (ia *IssueAgent) HandleIssueComment(owner, repo string, issueNumber int, co
 	// Check if we're ready to implement now
 	if state.Status == "waiting_for_clarification" {
 		lowerResponse := strings.ToLower(response)
-		if !strings.Contains(lowerResponse, "question") && !strings.Contains(lowerResponse, "clarif") {
+		// Check if the response is asking for clarification (not just mentioning it)
+		isAskingQuestion := strings.Contains(lowerResponse, "question?") ||
+			strings.Contains(lowerResponse, "questions:") ||
+			strings.Contains(lowerResponse, "could you clarify") ||
+			strings.Contains(lowerResponse, "can you clarify") ||
+			strings.Contains(lowerResponse, "please clarify") ||
+			strings.Contains(lowerResponse, "need clarification") ||
+			strings.HasSuffix(lowerResponse, "?")
+
+		if !isAskingQuestion {
 			state.Status = "ready_to_implement"
 			if err := ia.stateManager.SaveState(state); err != nil {
 				return fmt.Errorf("failed to save state: %w", err)
@@ -414,6 +423,9 @@ func (ia *IssueAgent) StartPolling(pollIntervalSeconds int, repositories []strin
 		},
 		HandlePRComment: func(owner, repo string, prNumber int, commentBody string) error {
 			return ia.HandlePRComment(owner, repo, prNumber, commentBody)
+		},
+		HandleImplementation: func(owner, repo string, issueNumber int) error {
+			return ia.StartImplementation(owner, repo, issueNumber)
 		},
 	}
 

@@ -11,9 +11,10 @@ import (
 
 // PollerHandlers contains callbacks for different event types
 type PollerHandlers struct {
-	HandleIssue        func(owner, repo string, issueNumber int) error
-	HandleIssueComment func(owner, repo string, issueNumber int, commentBody string) error
-	HandlePRComment    func(owner, repo string, prNumber int, commentBody string) error
+	HandleIssue            func(owner, repo string, issueNumber int) error
+	HandleIssueComment     func(owner, repo string, issueNumber int, commentBody string) error
+	HandlePRComment        func(owner, repo string, prNumber int, commentBody string) error
+	HandleImplementation   func(owner, repo string, issueNumber int) error
 }
 
 // Poller polls GitHub for assigned issues and triggers workflows
@@ -120,6 +121,15 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 		log.Printf("New issue detected: %s/%s #%d - %s", owner, repo, issueNumber, issue.GetTitle())
 		if handlers.HandleIssue != nil {
 			return handlers.HandleIssue(owner, repo, issueNumber)
+		}
+		return nil
+	}
+
+	// If issue is ready to implement, start implementation
+	if state.Status == "ready_to_implement" {
+		log.Printf("Issue %s/%s #%d is ready to implement - starting implementation", owner, repo, issueNumber)
+		if handlers.HandleImplementation != nil {
+			return handlers.HandleImplementation(owner, repo, issueNumber)
 		}
 		return nil
 	}
