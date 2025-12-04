@@ -127,14 +127,16 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 
 	// Reconcile status with latest comments (detect stuck states)
 	if state.Status == "waiting_for_clarification" {
+		log.Printf("🔍 Checking if issue %s/%s #%d needs status reconciliation", owner, repo, issueNumber)
 		if err := p.reconcileStatus(owner, repo, issueNumber, state); err != nil {
-			log.Printf("Warning: failed to reconcile status for issue #%d: %v", issueNumber, err)
+			log.Printf("⚠️  Warning: failed to reconcile status for issue #%d: %v", issueNumber, err)
 		}
 		// Reload state after potential reconciliation
 		state, err = p.stateManager.GetState(owner, repo, issueNumber)
 		if err != nil {
 			return fmt.Errorf("failed to reload state after reconciliation: %w", err)
 		}
+		log.Printf("📊 Issue %s/%s #%d status after reconciliation: %s", owner, repo, issueNumber, state.Status)
 	}
 
 	// If issue is ready to implement, start implementation
@@ -212,7 +214,15 @@ func (p *Poller) reconcileStatus(owner, repo string, issueNumber int, state *Sta
 	}
 
 	// Check if the bot's last comment indicates readiness to implement
-	lowerComment := strings.ToLower(lastBotComment.GetBody())
+	commentBody := lastBotComment.GetBody()
+	lowerComment := strings.ToLower(commentBody)
+
+	previewLen := 100
+	if len(commentBody) < previewLen {
+		previewLen = len(commentBody)
+	}
+	log.Printf("🔍 Last bot comment (first 100 chars): %s", commentBody[:previewLen])
+
 	indicatesReady := strings.Contains(lowerComment, "i'll create a pr") ||
 		strings.Contains(lowerComment, "i will create a pr") ||
 		strings.Contains(lowerComment, "i'll create the pr") ||
@@ -222,6 +232,8 @@ func (p *Poller) reconcileStatus(owner, repo string, issueNumber int, state *Sta
 		strings.Contains(lowerComment, "proceeding with") ||
 		strings.Contains(lowerComment, "i'll proceed") ||
 		strings.Contains(lowerComment, "i will proceed")
+
+	log.Printf("🔍 Indicates ready: %v, Current status: %s", indicatesReady, state.Status)
 
 	if indicatesReady && state.Status == "waiting_for_clarification" {
 		log.Printf("🔄 Reconciling status for issue %s/%s #%d: bot indicated readiness but status was waiting", owner, repo, issueNumber)
