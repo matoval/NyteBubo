@@ -288,21 +288,29 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 		defaultBranch = "main" // Default to main if not set
 	}
 
-	// Create a branch name
-	branchName := fmt.Sprintf("nytebubo/issue-%d", issueNumber)
-	state.BranchName = branchName
+	// Check if we already have a branch (retry scenario)
+	var branchName string
+	if state.BranchName != "" {
+		// Reuse existing branch from previous attempt
+		branchName = state.BranchName
+		fmt.Printf("♻️  Reusing existing branch: %s\n", branchName)
+	} else {
+		// Create a new branch name
+		branchName = fmt.Sprintf("nytebubo/issue-%d", issueNumber)
+		state.BranchName = branchName
 
-	// Try to create branch - if repo is empty, we'll commit directly to main
-	fmt.Printf("🌿 Creating branch: %s\n", branchName)
-	err = ia.github.CreateBranch(owner, repo, branchName, defaultBranch)
-	if err != nil {
-		// Check if repo is empty (409 error)
-		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "empty") {
-			fmt.Printf("📝 Repository is empty - will create initial commit on %s instead of branch\n", defaultBranch)
-			branchName = defaultBranch // Commit directly to main
-			state.BranchName = branchName
-		} else {
-			return fmt.Errorf("failed to create branch: %w", err)
+		// Try to create branch - if repo is empty, we'll commit directly to main
+		fmt.Printf("🌿 Creating branch: %s\n", branchName)
+		err = ia.github.CreateBranch(owner, repo, branchName, defaultBranch)
+		if err != nil {
+			// Check if repo is empty (409 error)
+			if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "empty") {
+				fmt.Printf("📝 Repository is empty - will create initial commit on %s instead of branch\n", defaultBranch)
+				branchName = defaultBranch // Commit directly to main
+				state.BranchName = branchName
+			} else {
+				return fmt.Errorf("failed to create branch: %w", err)
+			}
 		}
 	}
 
