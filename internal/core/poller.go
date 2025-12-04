@@ -125,6 +125,18 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 		return nil
 	}
 
+	// Reconcile status with latest comments (detect stuck states)
+	if state.Status == "waiting_for_clarification" {
+		if err := p.reconcileStatus(owner, repo, issueNumber, state); err != nil {
+			log.Printf("Warning: failed to reconcile status for issue #%d: %v", issueNumber, err)
+		}
+		// Reload state after potential reconciliation
+		state, err = p.stateManager.GetState(owner, repo, issueNumber)
+		if err != nil {
+			return fmt.Errorf("failed to reload state after reconciliation: %w", err)
+		}
+	}
+
 	// If issue is ready to implement, start implementation
 	if state.Status == "ready_to_implement" {
 		log.Printf("Issue %s/%s #%d is ready to implement - starting implementation", owner, repo, issueNumber)
@@ -174,6 +186,47 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+// reconcileStatus checks if the bot's last comment indicates readiness but status doesn't match
+func (p *Poller) reconcileStatus(owner, repo string, issueNumber int, state *State) error {
+	comments, err := p.github.ListIssueComments(owner, repo, issueNumber)
+	if err != nil {
+		return err
+	}
+
+	// Find the bot's last comment
+	var lastBotComment *github.IssueComment
+	for i := len(comments) - 1; i >= 0; i-- {
+		if comments[i].GetUser().GetLogin() == p.username {
+			lastBotComment = comments[i]
+			break
+		}
+	}
+
+	if lastBotComment == nil {
+		return nil // No bot comments yet
+	}
+
+	// Check if the bot's last comment indicates readiness to implement
+	lowerComment := strings.ToLower(lastBotComment.GetBody())
+	indicatesReady := strings.Contains(lowerComment, "i'll create a pr") ||
+		strings.Contains(lowerComment, "i will create a pr") ||
+		strings.Contains(lowerComment, "i'll create the pr") ||
+		strings.Contains(lowerComment, "i will create the pr") ||
+		strings.Contains(lowerComment, "i'll start working") ||
+		strings.Contains(lowerComment, "i will start working") ||
+		strings.Contains(lowerComment, "proceeding with") ||
+		strings.Contains(lowerComment, "i'll proceed") ||
+		strings.Contains(lowerComment, "i will proceed")
+
+	if indicatesReady && state.Status == "waiting_for_clarification" {
+		log.Printf("🔄 Reconciling status for issue %s/%s #%d: bot indicated readiness but status was waiting", owner, repo, issueNumber)
+		state.Status = "ready_to_implement"
+		return p.stateManager.SaveState(state)
 	}
 
 	return nil
