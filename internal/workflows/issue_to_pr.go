@@ -312,49 +312,43 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 
 	fmt.Printf("🤖 Generating code with AI...\n")
 
-	maxRetries := 3
+	// Backoff pattern: 60s, 120s, 240s, then 240s forever
 	backoffDurations := []time.Duration{60 * time.Second, 120 * time.Second, 240 * time.Second}
+	maxBackoff := 240 * time.Second
 
 	var codeResponse string
 	var usage core.TokenUsage
-	var lastErr error
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	attempt := 0
+	for {
 		codeResponse, usage, err = ia.claude.GenerateCode(task, repoContext, language, state.Conversation)
 		if err == nil {
 			// Success!
 			break
 		}
 
-		lastErr = err
-
 		// Check if it's a rate limit error
 		isRateLimit := strings.Contains(err.Error(), "429") ||
 			strings.Contains(strings.ToLower(err.Error()), "rate limit") ||
 			strings.Contains(strings.ToLower(err.Error()), "rate-limit")
 
-		if isRateLimit && attempt < maxRetries-1 {
-			waitDuration := backoffDurations[attempt]
-			fmt.Printf("⏳ Rate limit hit, waiting %v before retry %d/%d...\n", waitDuration, attempt+2, maxRetries)
-			time.Sleep(waitDuration)
-			fmt.Printf("🔄 Retrying code generation (attempt %d/%d)...\n", attempt+2, maxRetries)
-			continue
+		if !isRateLimit {
+			// Non-rate-limit error, fail immediately
+			return fmt.Errorf("failed to generate code: %w", err)
 		}
 
-		// Non-rate-limit error or exhausted retries
-		break
-	}
-
-	if lastErr != nil {
-		// All retries failed, reset status so poller can retry later
-		if strings.Contains(lastErr.Error(), "429") || strings.Contains(strings.ToLower(lastErr.Error()), "rate limit") {
-			fmt.Printf("❌ Rate limit persists after %d retries. Resetting status for later retry.\n", maxRetries)
-			state.Status = "ready_to_implement"
-			if saveErr := ia.stateManager.SaveState(state); saveErr != nil {
-				fmt.Printf("⚠️  Error saving state: %v\n", saveErr)
-			}
+		// Calculate wait duration (cap at maxBackoff for attempts >= 3)
+		var waitDuration time.Duration
+		if attempt < len(backoffDurations) {
+			waitDuration = backoffDurations[attempt]
+		} else {
+			waitDuration = maxBackoff
 		}
-		return fmt.Errorf("failed to generate code: %w", lastErr)
+
+		attempt++
+		fmt.Printf("⏳ Rate limit hit, waiting %v before retry (attempt %d)...\n", waitDuration, attempt+1)
+		time.Sleep(waitDuration)
+		fmt.Printf("🔄 Retrying code generation (attempt %d)...\n", attempt+1)
 	}
 
 	fmt.Printf("✅ Code generated successfully\n")
