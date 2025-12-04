@@ -37,6 +37,16 @@ func NewGitHubClient(token string) *GitHubClient {
 	}
 }
 
+// GetClient returns the underlying GitHub client
+func (gc *GitHubClient) GetClient() *github.Client {
+	return gc.client
+}
+
+// GetContext returns the context
+func (gc *GitHubClient) GetContext() context.Context {
+	return gc.ctx
+}
+
 // GetIssue retrieves an issue from a repository
 func (gc *GitHubClient) GetIssue(owner, repo string, number int) (*github.Issue, error) {
 	issue, _, err := gc.client.Issues.Get(gc.ctx, owner, repo, number)
