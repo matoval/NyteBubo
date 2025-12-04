@@ -306,15 +306,57 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 		}
 	}
 
-	// Get code generation from Claude
+	// Get code generation from Claude with retry logic for rate limits
 	task := fmt.Sprintf("Implement the changes for issue #%d", issueNumber)
 	repoContext := fmt.Sprintf("Repository: %s/%s, Language: %s", owner, repo, language)
 
 	fmt.Printf("🤖 Generating code with AI...\n")
-	codeResponse, usage, err := ia.claude.GenerateCode(task, repoContext, language, state.Conversation)
-	if err != nil {
-		return fmt.Errorf("failed to generate code: %w", err)
+
+	maxRetries := 3
+	backoffDurations := []time.Duration{60 * time.Second, 120 * time.Second, 240 * time.Second}
+
+	var codeResponse string
+	var usage core.TokenUsage
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		codeResponse, usage, err = ia.claude.GenerateCode(task, repoContext, language, state.Conversation)
+		if err == nil {
+			// Success!
+			break
+		}
+
+		lastErr = err
+
+		// Check if it's a rate limit error
+		isRateLimit := strings.Contains(err.Error(), "429") ||
+			strings.Contains(strings.ToLower(err.Error()), "rate limit") ||
+			strings.Contains(strings.ToLower(err.Error()), "rate-limit")
+
+		if isRateLimit && attempt < maxRetries-1 {
+			waitDuration := backoffDurations[attempt]
+			fmt.Printf("⏳ Rate limit hit, waiting %v before retry %d/%d...\n", waitDuration, attempt+2, maxRetries)
+			time.Sleep(waitDuration)
+			fmt.Printf("🔄 Retrying code generation (attempt %d/%d)...\n", attempt+2, maxRetries)
+			continue
+		}
+
+		// Non-rate-limit error or exhausted retries
+		break
 	}
+
+	if lastErr != nil {
+		// All retries failed, reset status so poller can retry later
+		if strings.Contains(lastErr.Error(), "429") || strings.Contains(strings.ToLower(lastErr.Error()), "rate limit") {
+			fmt.Printf("❌ Rate limit persists after %d retries. Resetting status for later retry.\n", maxRetries)
+			state.Status = "ready_to_implement"
+			if saveErr := ia.stateManager.SaveState(state); saveErr != nil {
+				fmt.Printf("⚠️  Error saving state: %v\n", saveErr)
+			}
+		}
+		return fmt.Errorf("failed to generate code: %w", lastErr)
+	}
+
 	fmt.Printf("✅ Code generated successfully\n")
 
 	// Track token usage
