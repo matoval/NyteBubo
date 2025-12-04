@@ -327,14 +327,30 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 			break
 		}
 
-		// Check if it's a rate limit error
+		// Check if it's a retryable error (rate limit or server error)
 		isRateLimit := strings.Contains(err.Error(), "429") ||
 			strings.Contains(strings.ToLower(err.Error()), "rate limit") ||
 			strings.Contains(strings.ToLower(err.Error()), "rate-limit")
 
-		if !isRateLimit {
-			// Non-rate-limit error, fail immediately
+		isServerError := strings.Contains(err.Error(), "500") ||
+			strings.Contains(err.Error(), "502") ||
+			strings.Contains(err.Error(), "503") ||
+			strings.Contains(err.Error(), "504") ||
+			strings.Contains(strings.ToLower(err.Error()), "internal server error") ||
+			strings.Contains(strings.ToLower(err.Error()), "bad gateway") ||
+			strings.Contains(strings.ToLower(err.Error()), "service unavailable") ||
+			strings.Contains(strings.ToLower(err.Error()), "gateway timeout")
+
+		isRetryable := isRateLimit || isServerError
+
+		if !isRetryable {
+			// Non-retryable error, fail immediately
 			return fmt.Errorf("failed to generate code: %w", err)
+		}
+
+		errorType := "Rate limit"
+		if isServerError {
+			errorType = "Server error"
 		}
 
 		// Calculate wait duration (cap at maxBackoff for attempts >= 3)
@@ -346,7 +362,7 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 		}
 
 		attempt++
-		fmt.Printf("⏳ Rate limit hit, waiting %v before retry (attempt %d)...\n", waitDuration, attempt+1)
+		fmt.Printf("⏳ %s detected, waiting %v before retry (attempt %d)...\n", errorType, waitDuration, attempt+1)
 		time.Sleep(waitDuration)
 		fmt.Printf("🔄 Retrying code generation (attempt %d)...\n", attempt+1)
 	}

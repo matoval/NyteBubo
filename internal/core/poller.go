@@ -148,6 +148,23 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 		return nil
 	}
 
+	// If issue is stuck in "implementing" status (failed during implementation), retry
+	if state.Status == "implementing" {
+		// Check how long it's been stuck (more than 10 minutes = definitely stuck)
+		stuckDuration := time.Since(state.UpdatedAt)
+		if stuckDuration > 10*time.Minute {
+			log.Printf("⚠️  Issue %s/%s #%d stuck in 'implementing' for %v - retrying", owner, repo, issueNumber, stuckDuration)
+			state.Status = "ready_to_implement"
+			if err := p.stateManager.SaveState(state); err != nil {
+				log.Printf("Error resetting stuck status: %v", err)
+			}
+			if handlers.HandleImplementation != nil {
+				return handlers.HandleImplementation(owner, repo, issueNumber)
+			}
+		}
+		return nil
+	}
+
 	// If we have state, check if there are new comments we need to process
 	if state.Status == "waiting_for_clarification" {
 		newComments, err := p.getNewComments(owner, repo, issueNumber, state)
