@@ -312,6 +312,11 @@ func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) e
 				return fmt.Errorf("failed to create branch: %w", err)
 			}
 		}
+
+		// Save state immediately after creating branch to persist BranchName
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state after branch creation: %w", err)
+		}
 	}
 
 	// Get code generation from Claude with retry logic for rate limits
