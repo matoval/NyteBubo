@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -542,20 +543,110 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 	return nil
 }
 
-// parseCodeChanges extracts file paths and content from Claude's response
+// parseCodeChanges extracts file paths and content from AI response
+// Handles both JSON structured output and markdown code blocks
 func parseCodeChanges(response string) map[string]string {
 	changes := make(map[string]string)
 
-	// Simple regex to find code blocks with file paths
-	// Format: ```language filename.ext
-	re := regexp.MustCompile("(?s)```\\w+\\s+([\\w/.-]+)\\n(.+?)```")
-	matches := re.FindAllStringSubmatch(response, -1)
+	// First, try to parse as JSON (structured output)
+	changes = tryParseJSON(response)
+	if len(changes) > 0 {
+		fmt.Printf("✓ Parsed %d file(s) from JSON structured output\n", len(changes))
+		return changes
+	}
+
+	// Fallback to markdown parsing with improved regex patterns
+	changes = tryParseMarkdown(response)
+	if len(changes) > 0 {
+		fmt.Printf("✓ Parsed %d file(s) from markdown format\n", len(changes))
+		return changes
+	}
+
+	fmt.Printf("⚠️  No file changes detected in response\n")
+	return changes
+}
+
+// tryParseJSON attempts to parse structured JSON output
+func tryParseJSON(response string) map[string]string {
+	changes := make(map[string]string)
+
+	// Try to parse as JSON
+	var jsonResponse struct {
+		Summary string `json:"summary"`
+		Files   []struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		} `json:"files"`
+	}
+
+	if err := json.Unmarshal([]byte(response), &jsonResponse); err != nil {
+		// Not valid JSON, that's okay
+		return changes
+	}
+
+	// Extract files from JSON structure
+	for _, file := range jsonResponse.Files {
+		if file.Path != "" && file.Content != "" {
+			changes[file.Path] = file.Content
+		}
+	}
+
+	return changes
+}
+
+// tryParseMarkdown attempts to parse markdown code blocks with file paths
+func tryParseMarkdown(response string) map[string]string {
+	changes := make(map[string]string)
+
+	// Pattern 1: Standard format - ```language path/to/file.ext
+	// More flexible: optional language, flexible whitespace
+	re1 := regexp.MustCompile("(?s)```(?:\\w+)?\\s+([\\w/._ -]+?)\\s*\\n(.+?)```")
+	matches := re1.FindAllStringSubmatch(response, -1)
 
 	for _, match := range matches {
 		if len(match) == 3 {
-			filePath := match[1]
-			content := match[2]
+			filePath := strings.TrimSpace(match[1])
+			content := strings.TrimRight(match[2], "\n\r \t")
+
+			// Validate it looks like a file path (has extension or /)
+			if strings.Contains(filePath, ".") || strings.Contains(filePath, "/") {
+				changes[filePath] = content
+			}
+		}
+	}
+
+	if len(changes) > 0 {
+		return changes
+	}
+
+	// Pattern 2: Alternative format - File: path/to/file.ext followed by code block
+	re2 := regexp.MustCompile("(?i)(?:File|Path):\\s*`?([\\w/._-]+)`?\\s*\\n+```(?:\\w+)?\\s*\\n(.+?)```")
+	matches = re2.FindAllStringSubmatch(response, -1)
+
+	for _, match := range matches {
+		if len(match) == 3 {
+			filePath := strings.TrimSpace(match[1])
+			content := strings.TrimRight(match[2], "\n\r \t")
 			changes[filePath] = content
+		}
+	}
+
+	if len(changes) > 0 {
+		return changes
+	}
+
+	// Pattern 3: Simple format - path/to/file.ext on its own line before code block
+	re3 := regexp.MustCompile("(?m)^([\\w/._-]+)\\s*$\\s*```(?:\\w+)?\\s*\\n(.+?)```")
+	matches = re3.FindAllStringSubmatch(response, -1)
+
+	for _, match := range matches {
+		if len(match) == 3 {
+			filePath := strings.TrimSpace(match[1])
+			// Only accept if it looks like a file path
+			if strings.Contains(filePath, ".") && !strings.Contains(filePath, " ") {
+				content := strings.TrimRight(match[2], "\n\r \t")
+				changes[filePath] = content
+			}
 		}
 	}
 

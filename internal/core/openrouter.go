@@ -57,10 +57,22 @@ type openRouterMessage struct {
 }
 
 type openRouterRequest struct {
-	Model      string              `json:"model"`
-	Messages   []openRouterMessage `json:"messages"`
-	MaxTokens  int                 `json:"max_tokens,omitempty"`
-	Temperature float64            `json:"temperature,omitempty"`
+	Model          string              `json:"model"`
+	Messages       []openRouterMessage `json:"messages"`
+	MaxTokens      int                 `json:"max_tokens,omitempty"`
+	Temperature    float64             `json:"temperature,omitempty"`
+	ResponseFormat *responseFormat     `json:"response_format,omitempty"`
+}
+
+type responseFormat struct {
+	Type       string      `json:"type"`
+	JSONSchema *jsonSchema `json:"json_schema,omitempty"`
+}
+
+type jsonSchema struct {
+	Name   string         `json:"name"`
+	Strict bool           `json:"strict"`
+	Schema map[string]any `json:"schema"`
 }
 
 type openRouterUsage struct {
@@ -89,8 +101,31 @@ type openRouterError struct {
 	} `json:"error"`
 }
 
+// SendMessageWithStructuredOutput sends a message with optional JSON schema for structured output
+// If useStructuredOutput is true, it attempts JSON schema first, then falls back to regular format
+func (ca *ClaudeAgent) SendMessageWithStructuredOutput(messages []AgentMessage, systemPrompt string, useStructuredOutput bool) (string, TokenUsage, error) {
+	if useStructuredOutput {
+		// Try with structured output first
+		response, usage, err := ca.sendMessageInternal(messages, systemPrompt, true)
+		if err == nil {
+			return response, usage, nil
+		}
+
+		// If structured output failed, log and retry without it
+		log.Printf("⚠️  Structured output not supported by model, falling back to markdown format")
+	}
+
+	// Use regular format (no structured output)
+	return ca.sendMessageInternal(messages, systemPrompt, false)
+}
+
 // SendMessage sends a message to OpenRouter and gets a response with usage tracking
 func (ca *ClaudeAgent) SendMessage(messages []AgentMessage, systemPrompt string) (string, TokenUsage, error) {
+	return ca.sendMessageInternal(messages, systemPrompt, false)
+}
+
+// sendMessageInternal is the internal implementation that handles both structured and regular output
+func (ca *ClaudeAgent) sendMessageInternal(messages []AgentMessage, systemPrompt string, useStructuredOutput bool) (string, TokenUsage, error) {
 	// Build messages array with system prompt first
 	var apiMessages []openRouterMessage
 
@@ -115,6 +150,47 @@ func (ca *ClaudeAgent) SendMessage(messages []AgentMessage, systemPrompt string)
 		Model:     ca.model,
 		Messages:  apiMessages,
 		MaxTokens: 8096,
+	}
+
+	// Add structured output schema if requested
+	if useStructuredOutput {
+		reqBody.ResponseFormat = &responseFormat{
+			Type: "json_schema",
+			JSONSchema: &jsonSchema{
+				Name:   "code_changes",
+				Strict: true,
+				Schema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"summary": map[string]any{
+							"type":        "string",
+							"description": "A brief summary of the changes made",
+						},
+						"files": map[string]any{
+							"type":        "array",
+							"description": "List of files to create or modify",
+							"items": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"path": map[string]any{
+										"type":        "string",
+										"description": "File path relative to repository root",
+									},
+									"content": map[string]any{
+										"type":        "string",
+										"description": "Complete file content",
+									},
+								},
+								"required":             []string{"path", "content"},
+								"additionalProperties": false,
+							},
+						},
+					},
+					"required":             []string{"summary", "files"},
+					"additionalProperties": false,
+				},
+			},
+		}
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -232,6 +308,7 @@ Provide:
 }
 
 // GenerateCode asks Claude to generate code for a specific task
+// It attempts to use structured JSON output for compatible models, with markdown fallback
 func (ca *ClaudeAgent) GenerateCode(task, context, language string, conversationHistory []AgentMessage) (string, TokenUsage, error) {
 	systemPrompt := fmt.Sprintf(`You are an expert software engineer working on a GitHub issue.
 You have full access to the repository and need to implement the requested changes.
@@ -241,34 +318,39 @@ Repository Context: %s
 
 Your task: %s
 
-IMPORTANT - File Format Requirements:
-You MUST format each file change using this EXACT format:
+IMPORTANT - Response Format:
+Provide a summary of your changes followed by the file changes.
 
-` + "```" + `markdown path/to/file.md
-file content here
+For each file you create or modify, use this format:
+
+` + "```" + `%s path/to/file.ext
+complete file content here
 ` + "```" + `
 
-For example:
+Examples:
+
 ` + "```" + `markdown README.md
-# My Project
-This is a README file
+# Project Title
+This is the content of README.md
 ` + "```" + `
 
-` + "```" + `python src/main.py
+` + "```" + `python main.py
 def hello():
     print("Hello World")
 ` + "```" + `
 
 Rules:
-1. Start code blocks with three backticks followed by the language name and a space, then the file path
-2. Put the complete file content inside the code block
-3. End with three backticks
-4. Use one code block per file
-5. The file path should be relative to the repository root
+1. Use code blocks with three backticks
+2. After backticks, put the language/format followed by a SPACE, then the file path
+3. Put complete file content on the next line
+4. Close with three backticks
+5. One code block per file
+6. File paths are relative to repository root
 
-Do NOT use any other format. This format is required for automatic file processing.`, language, context, task)
+This format is critical for automatic processing.`, language, context, task, language)
 
-	return ca.SendMessage(conversationHistory, systemPrompt)
+	// Try structured output first, fallback to regular message if model doesn't support it
+	return ca.SendMessageWithStructuredOutput(conversationHistory, systemPrompt, true)
 }
 
 // ReviewFeedback processes review feedback and generates updated code
