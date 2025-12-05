@@ -236,8 +236,245 @@ func (ia *IssueAgent) HandleIssueComment(owner, repo string, issueNumber int, co
 	return nil
 }
 
+// StartImplementationWithSandbox implements the solution using a local sandbox
+func (ia *IssueAgent) StartImplementationWithSandbox(owner, repo string, issueNumber int) error {
+	fmt.Printf("🚀 Starting implementation for issue %s/%s #%d (using sandbox)\n", owner, repo, issueNumber)
+
+	state, err := ia.stateManager.GetState(owner, repo, issueNumber)
+	if err != nil {
+		return fmt.Errorf("failed to get state: %w", err)
+	}
+
+	if state == nil {
+		return fmt.Errorf("no state found")
+	}
+
+	// Update status
+	state.Status = "implementing"
+	if err := ia.stateManager.SaveState(state); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
+	}
+
+	// Notify that we're starting implementation
+	comment := "🚀 Great! I have a clear understanding now. I'll clone the repository, make changes, and run tests before creating a pull request."
+	if err := ia.github.CreateIssueComment(owner, repo, issueNumber, comment); err != nil {
+		return fmt.Errorf("failed to create comment: %w", err)
+	}
+
+	// Get repository info
+	repository, err := ia.github.GetRepository(owner, repo)
+	if err != nil {
+		return fmt.Errorf("failed to get repository: %w", err)
+	}
+
+	language := repository.GetLanguage()
+	defaultBranch := repository.GetDefaultBranch()
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	// Create branch name
+	branchName := fmt.Sprintf("nytebubo/issue-%d", issueNumber)
+	if state.BranchName != "" {
+		branchName = state.BranchName
+	} else {
+		state.BranchName = branchName
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+	}
+
+	// Create sandbox
+	githubToken := ia.github.GetToken()
+	sandbox, err := core.NewSandbox(ia.workingDir, owner, repo, issueNumber, githubToken)
+	if err != nil {
+		return fmt.Errorf("failed to create sandbox: %w", err)
+	}
+
+	// Ensure cleanup happens
+	defer func() {
+		if err := sandbox.Cleanup(); err != nil {
+			fmt.Printf("⚠️  Warning: failed to cleanup sandbox: %v\n", err)
+		}
+	}()
+
+	// Clone repository
+	if err := sandbox.CloneRepo(); err != nil {
+		return fmt.Errorf("failed to clone repo: %w", err)
+	}
+
+	// Create branch
+	if err := sandbox.CreateBranch(branchName); err != nil {
+		return fmt.Errorf("failed to create branch: %w", err)
+	}
+
+	// Get repo context for AI
+	files, err := sandbox.ListFiles()
+	if err != nil {
+		return fmt.Errorf("failed to list files: %w", err)
+	}
+
+	detectedLang, _ := sandbox.DetectLanguage()
+	if language == "" {
+		language = detectedLang
+	}
+
+	repoContext := fmt.Sprintf("Repository: %s/%s\nLanguage: %s\nExisting files: %s",
+		owner, repo, language, strings.Join(files, ", "))
+
+	// Generate code with full context
+	task := fmt.Sprintf("Implement the changes for issue #%d", issueNumber)
+	fmt.Printf("🤖 Generating code with AI (with full repo context)...\n")
+
+	codeResponse, usage, err := ia.claude.GenerateCode(task, repoContext, language, state.Conversation)
+	if err != nil {
+		return fmt.Errorf("failed to generate code: %w", err)
+	}
+
+	// Track token usage
+	state.TotalInputTokens += usage.InputTokens
+	state.TotalOutputTokens += usage.OutputTokens
+	state.TotalCost += usage.Cost
+
+	// Parse the code response and extract file changes
+	fileChanges := parseCodeChanges(codeResponse)
+	summary := extractSummary(codeResponse, fileChanges)
+
+	if len(fileChanges) == 0 {
+		fmt.Printf("⚠️  Warning: No file changes detected from AI response\n")
+		comment := fmt.Sprintf("⚠️ I attempted to implement this issue, but couldn't generate files in the correct format.\n\nHere's what I tried to generate:\n\n%s\n\n---\n\nCould you please review this and let me know if you need me to try again?\n\n🤖 NyteBubo", summary)
+		if err := ia.github.CreateIssueComment(owner, repo, issueNumber, comment); err != nil {
+			return fmt.Errorf("failed to create comment: %w", err)
+		}
+
+		state.Status = "waiting_for_clarification"
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+		return nil
+	}
+
+	// Write files to sandbox
+	fmt.Printf("📝 Writing %d file(s) to sandbox...\n", len(fileChanges))
+	for filePath, content := range fileChanges {
+		fmt.Printf("  - Writing %s\n", filePath)
+		if err := sandbox.WriteFile(filePath, content); err != nil {
+			return fmt.Errorf("failed to write file %s: %w", filePath, err)
+		}
+	}
+
+	// Try to build and test (with retry for AI fixes)
+	maxAttempts := 10
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		fmt.Printf("\n🔍 Verification attempt %d/%d\n", attempt, maxAttempts)
+
+		buildOutput, testOutput, verifyErr := sandbox.Verify()
+
+		if verifyErr == nil {
+			fmt.Printf("✅ All checks passed!\n")
+			break
+		}
+
+		// Tests or build failed
+		fmt.Printf("❌ Verification failed: %v\n", verifyErr)
+
+		if attempt == maxAttempts {
+			// Out of retries - create PR anyway but note the failures
+			summary += fmt.Sprintf("\n\n⚠️ **Note**: Build/test verification failed after %d attempts. Please review carefully.\n\n", maxAttempts)
+			summary += fmt.Sprintf("**Build output:**\n```\n%s\n```\n\n", buildOutput)
+			summary += fmt.Sprintf("**Test output:**\n```\n%s\n```", testOutput)
+			break
+		}
+
+		// Ask AI to fix the issues
+		fmt.Printf("🤖 Asking AI to fix the issues...\n")
+
+		fixPrompt := fmt.Sprintf("The code has build or test failures. Please fix them.\n\nBuild output:\n```\n%s\n```\n\nTest output:\n```\n%s\n```\n\nError: %v\n\nPlease provide the corrected files.", buildOutput, testOutput, verifyErr)
+
+		state.Conversation = append(state.Conversation, core.AgentMessage{
+			Role:    "user",
+			Content: fixPrompt,
+		})
+
+		fixResponse, fixUsage, err := ia.claude.GenerateCode("Fix build/test failures", repoContext, language, state.Conversation)
+		if err != nil {
+			fmt.Printf("⚠️  Failed to get fix from AI: %v\n", err)
+			break
+		}
+
+		state.TotalInputTokens += fixUsage.InputTokens
+		state.TotalOutputTokens += fixUsage.OutputTokens
+		state.TotalCost += fixUsage.Cost
+
+		// Parse and apply fixes
+		fixedFiles := parseCodeChanges(fixResponse)
+		if len(fixedFiles) == 0 {
+			fmt.Printf("⚠️  AI didn't provide file fixes\n")
+			break
+		}
+
+		fmt.Printf("📝 Applying %d fix(es)...\n", len(fixedFiles))
+		for filePath, content := range fixedFiles {
+			fmt.Printf("  - Fixing %s\n", filePath)
+			if err := sandbox.WriteFile(filePath, content); err != nil {
+				fmt.Printf("⚠️  Failed to write fixed file: %v\n", err)
+			}
+		}
+	}
+
+	// Commit changes
+	commitMsg := fmt.Sprintf("Implement solution for issue #%d\n\n%s", issueNumber, summary)
+	if err := sandbox.Commit(commitMsg); err != nil {
+		return fmt.Errorf("failed to commit: %w", err)
+	}
+
+	// Push to remote
+	if err := sandbox.Push(branchName); err != nil {
+		return fmt.Errorf("failed to push: %w", err)
+	}
+
+	// Get issue for PR
+	issue, err := ia.github.GetIssue(owner, repo, issueNumber)
+	if err != nil {
+		return fmt.Errorf("failed to get issue: %w", err)
+	}
+
+	// Create PR
+	prTitle := fmt.Sprintf("Fix: %s", issue.GetTitle())
+	prBody := fmt.Sprintf("Fixes #%d\n\n%s\n\n---\n\n🤖 This PR was automatically generated and tested by NyteBubo", issueNumber, summary)
+
+	fmt.Printf("📬 Creating pull request...\n")
+	pr, err := ia.github.CreatePullRequest(owner, repo, prTitle, prBody, branchName, defaultBranch)
+	if err != nil {
+		return fmt.Errorf("failed to create PR: %w", err)
+	}
+	fmt.Printf("✅ Pull request #%d created successfully!\n", pr.GetNumber())
+
+	// Update state
+	prNumber := pr.GetNumber()
+	state.PRNumber = &prNumber
+	state.Status = "pr_created"
+	if err := ia.stateManager.SaveState(state); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
+	}
+
+	// Comment on the issue with PR link
+	prComment := fmt.Sprintf("✅ I've created a pull request with tested changes: #%d", prNumber)
+	if err := ia.github.CreateIssueComment(owner, repo, issueNumber, prComment); err != nil {
+		return fmt.Errorf("failed to create comment: %w", err)
+	}
+
+	return nil
+}
+
 // StartImplementation begins implementing the solution
 func (ia *IssueAgent) StartImplementation(owner, repo string, issueNumber int) error {
+	// Use sandbox implementation
+	return ia.StartImplementationWithSandbox(owner, repo, issueNumber)
+}
+
+// StartImplementationLegacy is the old API-based implementation (kept for reference)
+func (ia *IssueAgent) StartImplementationLegacy(owner, repo string, issueNumber int) error {
 	fmt.Printf("🚀 Starting implementation for issue %s/%s #%d\n", owner, repo, issueNumber)
 
 	state, err := ia.stateManager.GetState(owner, repo, issueNumber)

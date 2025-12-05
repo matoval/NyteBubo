@@ -12,6 +12,7 @@ import (
 type GitHubClient struct {
 	client *github.Client
 	ctx    context.Context
+	token  string
 }
 
 // GetPullRequest retrieves a pull request
@@ -34,7 +35,13 @@ func NewGitHubClient(token string) *GitHubClient {
 	return &GitHubClient{
 		client: github.NewClient(tc),
 		ctx:    ctx,
+		token:  token,
 	}
+}
+
+// GetToken returns the GitHub token
+func (gc *GitHubClient) GetToken() string {
+	return gc.token
 }
 
 // GetClient returns the underlying GitHub client
