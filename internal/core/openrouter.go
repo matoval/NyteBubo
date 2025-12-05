@@ -295,10 +295,12 @@ Title: %s
 Description:
 %s
 
-Provide:
-1. A clear summary of what this issue is asking for
-2. Any clarifying questions you have
-3. If everything is clear, confirm you understand and are ready to create a PR`, title, body)
+Instructions:
+- First, provide a clear summary of what this issue is asking for
+- If you have ANY clarifying questions or uncertainties, ask them clearly
+- If EVERYTHING is completely clear and you need no additional information, ONLY THEN say you're ready to proceed
+
+IMPORTANT: Either ask questions OR confirm readiness - never do both in the same response.`, title, body)
 
 	messages := []AgentMessage{
 		{Role: "user", Content: userMessage},

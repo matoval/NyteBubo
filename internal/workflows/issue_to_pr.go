@@ -142,15 +142,8 @@ func (ia *IssueAgent) HandleIssueAssignment(owner, repo string, issueNumber int)
 	// Post the analysis as a comment (only if it's actually new analysis, not just reviewing existing conversation)
 	shouldComment := len(state.Conversation) <= 2 // Only the initial issue and bot response
 
-	// Check if response indicates readiness without asking questions
-	lowerResponse := strings.ToLower(response)
-	isAskingQuestion := strings.Contains(lowerResponse, "question?") ||
-		strings.Contains(lowerResponse, "questions:") ||
-		strings.Contains(lowerResponse, "could you clarify") ||
-		strings.Contains(lowerResponse, "can you clarify") ||
-		strings.Contains(lowerResponse, "please clarify") ||
-		strings.Contains(lowerResponse, "need clarification") ||
-		strings.HasSuffix(lowerResponse, "?")
+	// Check if response is asking questions or confirming readiness
+	isAskingQuestion := isResponseAskingQuestions(response)
 
 	if shouldComment {
 		commentBody := fmt.Sprintf("👋 Hi! I've been assigned to this issue. Here's my understanding:\n\n%s", response)
@@ -225,17 +218,8 @@ func (ia *IssueAgent) HandleIssueComment(owner, repo string, issueNumber int, co
 
 	// Check if we're ready to implement now
 	if state.Status == "waiting_for_clarification" {
-		lowerResponse := strings.ToLower(response)
-		// Check if the response is asking for clarification (not just mentioning it)
-		isAskingQuestion := strings.Contains(lowerResponse, "question?") ||
-			strings.Contains(lowerResponse, "questions:") ||
-			strings.Contains(lowerResponse, "could you clarify") ||
-			strings.Contains(lowerResponse, "can you clarify") ||
-			strings.Contains(lowerResponse, "please clarify") ||
-			strings.Contains(lowerResponse, "need clarification") ||
-			strings.HasSuffix(lowerResponse, "?")
-
-		if !isAskingQuestion {
+		// Check if the response is still asking questions or ready to proceed
+		if !isResponseAskingQuestions(response) {
 			state.Status = "ready_to_implement"
 			if err := ia.stateManager.SaveState(state); err != nil {
 				return fmt.Errorf("failed to save state: %w", err)
@@ -654,6 +638,86 @@ func tryParseMarkdown(response string) map[string]string {
 	}
 
 	return changes
+}
+
+// isResponseAskingQuestions determines if the AI response contains clarifying questions
+// Uses multiple heuristics to detect questions more accurately than just checking for "?"
+func isResponseAskingQuestions(response string) bool {
+	lowerResponse := strings.ToLower(response)
+
+	// Count question marks to help determine intent
+	questionMarkCount := strings.Count(response, "?")
+
+	// Strong indicators that questions are being asked
+	strongIndicators := []string{
+		"clarifying question",
+		"could you clarify",
+		"can you clarify",
+		"please clarify",
+		"need clarification",
+		"need to know",
+		"would you like",
+		"do you want",
+		"should i",
+		"which one",
+		"what about",
+		"how should",
+	}
+
+	for _, indicator := range strongIndicators {
+		if strings.Contains(lowerResponse, indicator) {
+			return true
+		}
+	}
+
+	// Check for explicit question sections
+	if strings.Contains(lowerResponse, "questions:") || strings.Contains(lowerResponse, "question?") {
+		return true
+	}
+
+	// If there are multiple question marks, likely asking questions
+	if questionMarkCount >= 2 {
+		return true
+	}
+
+	// Check for readiness indicators - if present, NOT asking questions
+	readyIndicators := []string{
+		"ready to proceed",
+		"ready to implement",
+		"ready to create",
+		"i'll start working",
+		"i'll begin",
+		"clear understanding",
+		"everything is clear",
+		"no questions",
+		"no clarification needed",
+	}
+
+	hasReadyIndicator := false
+	for _, indicator := range readyIndicators {
+		if strings.Contains(lowerResponse, indicator) {
+			hasReadyIndicator = true
+			break
+		}
+	}
+
+	// If has ready indicator and no/few question marks, not asking questions
+	if hasReadyIndicator && questionMarkCount <= 1 {
+		return false
+	}
+
+	// If has a single question mark but also ready indicator, ambiguous - prefer safety (wait for user)
+	if questionMarkCount == 1 && hasReadyIndicator {
+		return true
+	}
+
+	// If ends with question mark and no ready indicators, asking questions
+	if strings.HasSuffix(strings.TrimSpace(response), "?") && !hasReadyIndicator {
+		return true
+	}
+
+	// Default: if we have any question marks and no clear ready signal, assume asking questions
+	return questionMarkCount > 0 && !hasReadyIndicator
 }
 
 // extractSummary extracts a human-readable summary from the AI response
