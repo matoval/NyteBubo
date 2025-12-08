@@ -66,6 +66,27 @@ func (gc *GitHubClient) GetFileContentFromRef(owner, repo, path, ref string) (st
 	return content, nil
 }
 
+// ListPRReviews retrieves all reviews for a pull request
+func (gc *GitHubClient) ListPRReviews(owner, repo string, number int) ([]*github.PullRequestReview, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	var allReviews []*github.PullRequestReview
+
+	for {
+		reviews, resp, err := gc.client.PullRequests.ListReviews(gc.ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list PR reviews: %w", err)
+		}
+		allReviews = append(allReviews, reviews...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allReviews, nil
+}
+
 // NewGitHubClient creates a new GitHub API client
 func NewGitHubClient(token string) *GitHubClient {
 	ctx := context.Background()

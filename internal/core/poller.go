@@ -185,37 +185,85 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 		}
 	}
 
-	// Check if there are new PR review comments
+	// Check if there are new PR review feedback (all types)
 	log.Printf("📊 Issue %s/%s #%d - Status: %s, PRNumber: %v", owner, repo, issueNumber, state.Status, state.PRNumber)
 
 	if state.Status == "pr_created" || state.Status == "reviewing" {
-		log.Printf("🔍 Checking for PR review comments (status allows it)")
+		log.Printf("🔍 Checking for PR feedback (status allows it)")
 		if state.PRNumber != nil {
-			log.Printf("🔍 PR Number is set: #%d, checking for new review comments...", *state.PRNumber)
-			newReviewComments, err := p.getNewPRComments(owner, repo, *state.PRNumber, state)
+			log.Printf("🔍 PR Number is set: #%d, checking for all types of feedback...", *state.PRNumber)
+
+			var allFeedback []string
+
+			// 1. Check for line-level review comments
+			lineComments, err := p.getNewPRComments(owner, repo, *state.PRNumber, state)
 			if err != nil {
-				log.Printf("❌ Error checking for new PR comments: %v", err)
-				return fmt.Errorf("failed to check for new PR comments: %w", err)
+				log.Printf("❌ Error checking for line comments: %v", err)
+			} else {
+				log.Printf("📝 Found %d new line-level comment(s)", len(lineComments))
+				for _, comment := range lineComments {
+					allFeedback = append(allFeedback, fmt.Sprintf("[Line Comment] %s", comment.GetBody()))
+				}
 			}
 
-			log.Printf("📝 Found %d new PR review comment(s) on PR #%d", len(newReviewComments), *state.PRNumber)
+			// 2. Check for general PR conversation comments
+			conversationComments, err := p.getNewPRConversationComments(owner, repo, *state.PRNumber, state)
+			if err != nil {
+				log.Printf("❌ Error checking for conversation comments: %v", err)
+			} else {
+				log.Printf("📝 Found %d new conversation comment(s)", len(conversationComments))
+				for _, comment := range conversationComments {
+					allFeedback = append(allFeedback, fmt.Sprintf("[Conversation] %s", comment.GetBody()))
+				}
+			}
 
-			if len(newReviewComments) > 0 {
-				log.Printf("New PR review comments detected on %s/%s #%d - processing %d comment(s)", owner, repo, *state.PRNumber, len(newReviewComments))
-				// Process each new PR comment
-				for _, comment := range newReviewComments {
-					if handlers.HandlePRComment != nil {
-						if err := handlers.HandlePRComment(owner, repo, *state.PRNumber, comment.GetBody()); err != nil {
-							log.Printf("Error handling PR comment on #%d: %v", *state.PRNumber, err)
-						}
+			// 3. Check for PR reviews (including CHANGES_REQUESTED)
+			reviews, err := p.getNewPRReviews(owner, repo, *state.PRNumber, state)
+			if err != nil {
+				log.Printf("❌ Error checking for reviews: %v", err)
+			} else {
+				log.Printf("📝 Found %d new review(s)", len(reviews))
+				for _, review := range reviews {
+					reviewType := review.GetState()
+					reviewBody := review.GetBody()
+					allFeedback = append(allFeedback, fmt.Sprintf("[%s Review] %s", reviewType, reviewBody))
+				}
+			}
+
+			// 4. IMPORTANT: Also check for active CHANGES_REQUESTED reviews (even if old)
+			// These are unresolved change requests that need to be addressed
+			activeChangeRequests, err := p.getActiveChangeRequests(owner, repo, *state.PRNumber)
+			if err != nil {
+				log.Printf("❌ Error checking for active change requests: %v", err)
+			} else if len(activeChangeRequests) > 0 {
+				log.Printf("⚠️  Found %d active CHANGES_REQUESTED review(s) that need addressing", len(activeChangeRequests))
+				for _, review := range activeChangeRequests {
+					// Add these even if they're old - they're still active!
+					reviewBody := review.GetBody()
+					if reviewBody != "" {
+						allFeedback = append(allFeedback, fmt.Sprintf("[Active Change Request] %s", reviewBody))
 					}
 				}
 			}
+
+			// Process combined feedback if any exists
+			if len(allFeedback) > 0 {
+				combinedFeedback := strings.Join(allFeedback, "\n\n---\n\n")
+				log.Printf("🎯 Processing %d total feedback item(s) on PR #%d", len(allFeedback), *state.PRNumber)
+
+				if handlers.HandlePRComment != nil {
+					if err := handlers.HandlePRComment(owner, repo, *state.PRNumber, combinedFeedback); err != nil {
+						log.Printf("Error handling PR feedback on #%d: %v", *state.PRNumber, err)
+					}
+				}
+			} else {
+				log.Printf("✅ No new feedback on PR #%d", *state.PRNumber)
+			}
 		} else {
-			log.Printf("⚠️  PR Number is nil - cannot check for PR comments")
+			log.Printf("⚠️  PR Number is nil - cannot check for PR feedback")
 		}
 	} else {
-		log.Printf("⏭️  Skipping PR comment check (status is '%s', needs to be 'pr_created' or 'reviewing')", state.Status)
+		log.Printf("⏭️  Skipping PR feedback check (status is '%s', needs to be 'pr_created' or 'reviewing')", state.Status)
 	}
 
 	return nil
@@ -345,4 +393,131 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// getNewPRConversationComments returns new general PR comments (not line-specific) since last processing
+func (p *Poller) getNewPRConversationComments(owner, repo string, prNumber int, state *State) ([]*github.IssueComment, error) {
+	log.Printf("🔎 Fetching PR conversation comments for %s/%s #%d", owner, repo, prNumber)
+	// PRs use the same comment API as issues
+	comments, err := p.github.ListIssueComments(owner, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("📋 Total PR conversation comments found: %d", len(comments))
+
+	var newComments []*github.IssueComment
+
+	for i, comment := range comments {
+		commentUser := comment.GetUser().GetLogin()
+		commentTime := comment.GetCreatedAt().Time
+		commentBody := comment.GetBody()
+
+		log.Printf("  Conversation Comment #%d: User=%s, Time=%v, Body=%s...",
+			i+1, commentUser, commentTime,
+			truncateString(commentBody, 50))
+
+		// Skip if it's the bot's own comment
+		if commentUser == p.username {
+			log.Printf("    ⏭️  Skipping (bot's own comment)")
+			continue
+		}
+
+		// Check if comment is newer than state update
+		if commentTime.After(state.UpdatedAt) {
+			log.Printf("    ✅ New comment (after %v)", state.UpdatedAt)
+			newComments = append(newComments, comment)
+		} else {
+			log.Printf("    ⏭️  Skipping (too old - comment: %v, state: %v)", commentTime, state.UpdatedAt)
+		}
+	}
+
+	log.Printf("📊 Filtered to %d new conversation comment(s)", len(newComments))
+	return newComments, nil
+}
+
+// getNewPRReviews returns new PR reviews (submitted reviews with summaries) since last processing
+func (p *Poller) getNewPRReviews(owner, repo string, prNumber int, state *State) ([]*github.PullRequestReview, error) {
+	log.Printf("🔎 Fetching PR reviews for %s/%s #%d", owner, repo, prNumber)
+	reviews, err := p.github.ListPRReviews(owner, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("📋 Total PR reviews found: %d", len(reviews))
+
+	var newReviews []*github.PullRequestReview
+
+	for i, review := range reviews {
+		reviewUser := review.GetUser().GetLogin()
+		reviewTime := review.GetSubmittedAt().Time
+		reviewState := review.GetState()
+		reviewBody := review.GetBody()
+
+		log.Printf("  Review #%d: User=%s, State=%s, Time=%v, Body=%s...",
+			i+1, reviewUser, reviewState, reviewTime,
+			truncateString(reviewBody, 50))
+
+		// Skip if it's the bot's own review
+		if reviewUser == p.username {
+			log.Printf("    ⏭️  Skipping (bot's own review)")
+			continue
+		}
+
+		// Only process reviews that have feedback (skip "COMMENTED" reviews with no body)
+		if reviewBody == "" && reviewState == "COMMENTED" {
+			log.Printf("    ⏭️  Skipping (empty comment-only review)")
+			continue
+		}
+
+		// Check if review is newer than state update
+		if reviewTime.After(state.UpdatedAt) {
+			log.Printf("    ✅ New review (after %v)", state.UpdatedAt)
+			newReviews = append(newReviews, review)
+		} else {
+			log.Printf("    ⏭️  Skipping (too old - review: %v, state: %v)", reviewTime, state.UpdatedAt)
+		}
+	}
+
+	log.Printf("📊 Filtered to %d new review(s)", len(newReviews))
+	return newReviews, nil
+}
+
+// getActiveChangeRequests returns all "CHANGES_REQUESTED" reviews that are still active
+// A change request is considered active if it hasn't been dismissed or overridden by an approval from the same reviewer
+func (p *Poller) getActiveChangeRequests(owner, repo string, prNumber int) ([]*github.PullRequestReview, error) {
+	log.Printf("🔎 Checking for active change requests on %s/%s #%d", owner, repo, prNumber)
+	allReviews, err := p.github.ListPRReviews(owner, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Track the latest review state per user
+	latestReviewByUser := make(map[string]*github.PullRequestReview)
+
+	for _, review := range allReviews {
+		user := review.GetUser().GetLogin()
+
+		// Skip bot's own reviews
+		if user == p.username {
+			continue
+		}
+
+		// Keep only the most recent review per user
+		if existing, ok := latestReviewByUser[user]; !ok || review.GetSubmittedAt().After(existing.GetSubmittedAt().Time) {
+			latestReviewByUser[user] = review
+		}
+	}
+
+	// Collect active change requests (latest review state is CHANGES_REQUESTED)
+	var activeChangeRequests []*github.PullRequestReview
+	for user, review := range latestReviewByUser {
+		if review.GetState() == "CHANGES_REQUESTED" {
+			log.Printf("  ⚠️  Active change request from %s (submitted: %v)", user, review.GetSubmittedAt().Time)
+			activeChangeRequests = append(activeChangeRequests, review)
+		}
+	}
+
+	log.Printf("📊 Found %d active change request(s)", len(activeChangeRequests))
+	return activeChangeRequests, nil
 }
