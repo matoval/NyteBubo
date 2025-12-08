@@ -186,12 +186,19 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 	}
 
 	// Check if there are new PR review comments
+	log.Printf("📊 Issue %s/%s #%d - Status: %s, PRNumber: %v", owner, repo, issueNumber, state.Status, state.PRNumber)
+
 	if state.Status == "pr_created" || state.Status == "reviewing" {
+		log.Printf("🔍 Checking for PR review comments (status allows it)")
 		if state.PRNumber != nil {
+			log.Printf("🔍 PR Number is set: #%d, checking for new review comments...", *state.PRNumber)
 			newReviewComments, err := p.getNewPRComments(owner, repo, *state.PRNumber, state)
 			if err != nil {
+				log.Printf("❌ Error checking for new PR comments: %v", err)
 				return fmt.Errorf("failed to check for new PR comments: %w", err)
 			}
+
+			log.Printf("📝 Found %d new PR review comment(s) on PR #%d", len(newReviewComments), *state.PRNumber)
 
 			if len(newReviewComments) > 0 {
 				log.Printf("New PR review comments detected on %s/%s #%d - processing %d comment(s)", owner, repo, *state.PRNumber, len(newReviewComments))
@@ -204,7 +211,11 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 					}
 				}
 			}
+		} else {
+			log.Printf("⚠️  PR Number is nil - cannot check for PR comments")
 		}
+	} else {
+		log.Printf("⏭️  Skipping PR comment check (status is '%s', needs to be 'pr_created' or 'reviewing')", state.Status)
 	}
 
 	return nil
@@ -289,26 +300,49 @@ func (p *Poller) getNewComments(owner, repo string, issueNumber int, state *Stat
 
 // getNewPRComments returns new PR review comments since last processing
 func (p *Poller) getNewPRComments(owner, repo string, prNumber int, state *State) ([]*github.PullRequestComment, error) {
+	log.Printf("🔎 Fetching PR review comments for %s/%s #%d", owner, repo, prNumber)
 	comments, err := p.github.ListPRComments(owner, repo, prNumber)
 	if err != nil {
 		return nil, err
 	}
 
+	log.Printf("📋 Total PR review comments found: %d", len(comments))
+
 	var newComments []*github.PullRequestComment
 
 	// Filter out bot's own comments and get new review comments
-	for _, comment := range comments {
+	for i, comment := range comments {
+		commentUser := comment.GetUser().GetLogin()
+		commentTime := comment.GetCreatedAt().Time
+		commentBody := comment.GetBody()
+
+		log.Printf("  Comment #%d: User=%s, Time=%v, Body=%s...",
+			i+1, commentUser, commentTime,
+			truncateString(commentBody, 50))
+
 		// Skip if it's the bot's own comment
-		if comment.GetUser().GetLogin() == p.username {
+		if commentUser == p.username {
+			log.Printf("    ⏭️  Skipping (bot's own comment)")
 			continue
 		}
 
 		// Check if comment is newer than state update
-		commentTime := comment.GetCreatedAt().Time
 		if commentTime.After(state.UpdatedAt) {
+			log.Printf("    ✅ New comment (after %v)", state.UpdatedAt)
 			newComments = append(newComments, comment)
+		} else {
+			log.Printf("    ⏭️  Skipping (too old - comment: %v, state: %v)", commentTime, state.UpdatedAt)
 		}
 	}
 
+	log.Printf("📊 Filtered to %d new comment(s)", len(newComments))
 	return newComments, nil
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
