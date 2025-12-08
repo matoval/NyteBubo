@@ -130,6 +130,41 @@ func (s *Sandbox) CreateBranch(branchName string) error {
 	return nil
 }
 
+// CheckoutBranch checks out an existing branch (fetches from remote if needed)
+func (s *Sandbox) CheckoutBranch(branchName string) error {
+	fmt.Printf("🔄 Checking out branch: %s\n", branchName)
+
+	// Fetch all branches from remote
+	cmd := exec.Command("git", "fetch", "origin")
+	cmd.Dir = s.repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Printf("⚠️  Warning: failed to fetch from remote: %v\nOutput: %s\n", err, string(output))
+	}
+
+	// Try to checkout the branch (might already exist locally)
+	cmd = exec.Command("git", "checkout", branchName)
+	cmd.Dir = s.repoPath
+	if _, err := cmd.CombinedOutput(); err != nil {
+		// If checkout failed, try to create it from remote
+		fmt.Printf("  Branch doesn't exist locally, trying remote...\n")
+		cmd = exec.Command("git", "checkout", "-b", branchName, fmt.Sprintf("origin/%s", branchName))
+		cmd.Dir = s.repoPath
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to checkout branch: %w\nOutput: %s", err, output)
+		}
+	}
+
+	// Pull latest changes for this branch
+	cmd = exec.Command("git", "pull", "origin", branchName)
+	cmd.Dir = s.repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Printf("⚠️  Warning: failed to pull latest changes for %s: %v\nOutput: %s\n", branchName, err, output)
+	}
+
+	fmt.Printf("✅ Checked out branch %s\n", branchName)
+	return nil
+}
+
 // WriteFile writes content to a file in the sandbox
 func (s *Sandbox) WriteFile(relativePath, content string) error {
 	fullPath := filepath.Join(s.repoPath, relativePath)
@@ -243,6 +278,19 @@ func (s *Sandbox) Push(branchName string) error {
 	}
 
 	fmt.Printf("✅ Branch pushed successfully\n")
+	return nil
+}
+
+// CommitAndPush commits all changes and pushes to remote in one operation
+func (s *Sandbox) CommitAndPush(branchName, message string) error {
+	if err := s.Commit(message); err != nil {
+		return fmt.Errorf("commit failed: %w", err)
+	}
+
+	if err := s.Push(branchName); err != nil {
+		return fmt.Errorf("push failed: %w", err)
+	}
+
 	return nil
 }
 

@@ -701,10 +701,11 @@ func (ia *IssueAgent) StartImplementationLegacy(owner, repo string, issueNumber 
 	return nil
 }
 
-// HandlePRComment handles comments on the PR
+// HandlePRComment handles comments on the PR with comprehensive review understanding
 func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentBody string) error {
-	// Find the issue number from PR (we'll need to store this mapping)
-	// For now, we'll extract from the PR body
+	fmt.Printf("📝 Processing PR review comment on %s/%s #%d\n", owner, repo, prNumber)
+
+	// Get PR details
 	pr, err := ia.github.GetPullRequest(owner, repo, prNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get PR: %w", err)
@@ -716,26 +717,59 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 		return fmt.Errorf("could not find issue number in PR body")
 	}
 
+	// Get state
 	state, err := ia.stateManager.GetState(owner, repo, issueNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get state: %w", err)
 	}
 
 	if state == nil {
-		return fmt.Errorf("no state found")
+		return fmt.Errorf("no state found for issue #%d", issueNumber)
 	}
 
 	// Update status
 	state.Status = "reviewing"
 
-	// Add comment to conversation
+	// Get all files changed in the PR to provide context
+	prFiles, err := ia.github.ListPRFiles(owner, repo, prNumber)
+	if err != nil {
+		return fmt.Errorf("failed to list PR files: %w", err)
+	}
+
+	// Build file context by fetching current content from PR branch
+	var fileContextBuilder strings.Builder
+	fileContextBuilder.WriteString("Files changed in this PR:\n\n")
+
+	for _, file := range prFiles {
+		// Skip deleted files
+		if file.GetStatus() == "removed" {
+			continue
+		}
+
+		filePath := file.GetFilename()
+		fmt.Printf("  📄 Fetching %s from branch %s\n", filePath, state.BranchName)
+
+		// Fetch current content from PR branch
+		content, err := ia.github.GetFileContentFromRef(owner, repo, filePath, state.BranchName)
+		if err != nil {
+			fmt.Printf("  ⚠️  Warning: couldn't fetch %s: %v\n", filePath, err)
+			continue
+		}
+
+		fileContextBuilder.WriteString(fmt.Sprintf("File: %s\n```\n%s\n```\n\n", filePath, content))
+	}
+
+	fileContext := fileContextBuilder.String()
+
+	// Add review feedback to conversation
 	state.Conversation = append(state.Conversation, core.AgentMessage{
 		Role:    "user",
-		Content: fmt.Sprintf("Review feedback: %s", commentBody),
+		Content: fmt.Sprintf("Pull Request Review Comment:\n\n%s", commentBody),
 	})
 
-	// Get updated code from Claude
-	response, usage, err := ia.claude.ReviewFeedback(commentBody, "", state.Conversation)
+	// Get AI response with full file context
+	fmt.Printf("🤖 Asking AI to analyze review feedback...\n")
+	response, usage, err := ia.claude.ReviewFeedback(commentBody, fileContext, state.Conversation)
 	if err != nil {
 		return fmt.Errorf("failed to get review response: %w", err)
 	}
@@ -751,12 +785,110 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 		Content: response,
 	})
 
-	// Parse and apply changes
-	fileChanges := parseCodeChanges(response)
-	for filePath, content := range fileChanges {
-		if err := ia.github.CreateOrUpdateFile(owner, repo, filePath, fmt.Sprintf("Address review feedback for issue #%d", issueNumber), content, state.BranchName, nil); err != nil {
-			return fmt.Errorf("failed to update file %s: %w", filePath, err)
+	// Check if AI is asking questions or disagreeing (vs making changes)
+	if isResponseAskingQuestions(response) {
+		fmt.Printf("💬 AI has questions or concerns about the review - posting comment to PR\n")
+
+		// Post comment to PR
+		if err := ia.github.CreateIssueComment(owner, repo, prNumber, response); err != nil {
+			return fmt.Errorf("failed to post comment to PR: %w", err)
 		}
+
+		// Save state and return (no code changes)
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		fmt.Printf("✅ Posted clarifying questions to PR #%d\n", prNumber)
+		return nil
+	}
+
+	// AI is making changes - use sandbox approach for verification
+	fmt.Printf("🔧 AI is making code changes - using sandbox for verification\n")
+
+	// Parse file changes from AI response
+	fileChanges := parseCodeChanges(response)
+	if len(fileChanges) == 0 {
+		fmt.Printf("⚠️  No code changes detected in AI response - posting as comment\n")
+		if err := ia.github.CreateIssueComment(owner, repo, prNumber, response); err != nil {
+			return fmt.Errorf("failed to post comment: %w", err)
+		}
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+		return nil
+	}
+
+	// Create sandbox for this review update
+	sandbox, err := core.NewSandbox(ia.workingDir, owner, repo, issueNumber, ia.github.GetToken())
+	if err != nil {
+		return fmt.Errorf("failed to create sandbox: %w", err)
+	}
+
+	// Ensure cleanup
+	defer func() {
+		if err := sandbox.Cleanup(); err != nil {
+			fmt.Printf("⚠️  Warning: failed to cleanup sandbox: %v\n", err)
+		}
+	}()
+
+	// Clone repository
+	if err := sandbox.CloneRepo(); err != nil {
+		return fmt.Errorf("failed to clone repo: %w", err)
+	}
+
+	// Checkout the PR branch
+	if err := sandbox.CheckoutBranch(state.BranchName); err != nil {
+		return fmt.Errorf("failed to checkout branch %s: %w", state.BranchName, err)
+	}
+
+	// Apply file changes
+	fmt.Printf("📝 Applying %d file change(s)...\n", len(fileChanges))
+	for filePath, content := range fileChanges {
+		if err := sandbox.WriteFile(filePath, content); err != nil {
+			return fmt.Errorf("failed to write file %s: %w", filePath, err)
+		}
+		fmt.Printf("  ✓ Updated %s\n", filePath)
+	}
+
+	// Verify changes (build and test)
+	fmt.Printf("🔍 Verifying changes...\n")
+	buildOutput, testOutput, verifyErr := sandbox.Verify()
+
+	if verifyErr != nil {
+		// Verification failed - post error as comment
+		errorMsg := fmt.Sprintf("⚠️ I attempted to address the review feedback, but the changes failed verification:\n\n**Build Output:**\n```\n%s\n```\n\n**Test Output:**\n```\n%s\n```\n\nI'll need to revise my approach. Could you provide guidance on how to address this?", buildOutput, testOutput)
+
+		if err := ia.github.CreateIssueComment(owner, repo, prNumber, errorMsg); err != nil {
+			return fmt.Errorf("failed to post verification error: %w", err)
+		}
+
+		// Save state but don't commit broken code
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		return fmt.Errorf("verification failed: %w", verifyErr)
+	}
+
+	// Commit and push changes
+	commitMsg := fmt.Sprintf("Address review feedback for issue #%d\n\nReview comment: %s", issueNumber, commentBody)
+	if err := sandbox.CommitAndPush(state.BranchName, commitMsg); err != nil {
+		return fmt.Errorf("failed to commit and push: %w", err)
+	}
+
+	// Post success comment to PR
+	var changedFiles []string
+	for filePath := range fileChanges {
+		changedFiles = append(changedFiles, filePath)
+	}
+
+	successMsg := fmt.Sprintf("✅ I've addressed the review feedback.\n\n**Changes made:**\n%s\n\n**Files updated:** %s\n\n**Verification:** All builds and tests pass ✓",
+		response,
+		strings.Join(changedFiles, ", "))
+
+	if err := ia.github.CreateIssueComment(owner, repo, prNumber, successMsg); err != nil {
+		fmt.Printf("⚠️  Warning: failed to post success comment: %v\n", err)
 	}
 
 	// Save state
@@ -764,6 +896,7 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
+	fmt.Printf("✅ Successfully addressed review feedback for PR #%d\n", prNumber)
 	return nil
 }
 

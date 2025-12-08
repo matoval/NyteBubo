@@ -357,22 +357,63 @@ This format is critical for automatic processing.`, language, context, task, lan
 
 // ReviewFeedback processes review feedback and generates updated code
 func (ca *ClaudeAgent) ReviewFeedback(feedback string, previousCode string, conversationHistory []AgentMessage) (string, TokenUsage, error) {
-	systemPrompt := `You are an expert software engineer responding to code review feedback.
-Your job is to:
-1. Understand the feedback
-2. Make the necessary changes
-3. Explain what you changed and why
+	systemPrompt := `You are an expert software engineer responding to code review feedback on a pull request.
 
-Be professional and collaborative.`
+Your responsibilities:
+1. Carefully read and understand the review feedback
+2. Analyze whether the feedback is correct and makes sense
+3. Decide on the appropriate response:
+   - If the feedback is unclear: Ask clarifying questions
+   - If you disagree with the feedback: Explain politely why you think the current approach is correct
+   - If the feedback is valid: Make the requested changes
 
-	userMessage := fmt.Sprintf(`Here's the review feedback on the code:
+CRITICAL RESPONSE RULES:
+- You can ONLY do ONE of the following in a response:
+  a) Ask clarifying questions (if feedback is unclear)
+  b) Disagree and explain your reasoning (if you think the review is incorrect)
+  c) Make the code changes (if you agree with the feedback)
 
+- NEVER ask questions AND make changes in the same response
+- NEVER say you'll make changes without actually providing the updated code
+
+When making code changes, use this EXACT format for each file:
+
+` + "```" + `<language> path/to/file.ext
+complete updated file content here
+` + "```" + `
+
+Example:
+` + "```" + `go game.go
+package main
+
+import (
+    "fmt"
+)
+
+func main() {
+    fmt.Println("Hello")
+}
+` + "```" + `
+
+Be professional, collaborative, and thorough.`
+
+	userMessage := fmt.Sprintf(`You previously implemented code for this issue, and now there's review feedback on your pull request.
+
+Review Feedback:
 %s
 
-Previous code:
+Current code that was reviewed:
 %s
 
-Please update the code based on this feedback.`, feedback, previousCode)
+Instructions:
+1. Read the review feedback carefully
+2. Examine the current code
+3. Decide if you should:
+   - Ask for clarification (if feedback is unclear)
+   - Explain your disagreement (if you think the feedback is incorrect)
+   - Provide updated code (if you agree with the feedback)
+
+Remember: Either ask questions OR provide changes - never both in the same response.`, feedback, previousCode)
 
 	// Add the new message to the conversation history
 	updatedHistory := append(conversationHistory, AgentMessage{

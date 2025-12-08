@@ -24,6 +24,48 @@ func (gc *GitHubClient) GetPullRequest(owner, repo string, number int) (*github.
 	return pr, nil
 }
 
+// ListPRFiles retrieves all files changed in a pull request
+func (gc *GitHubClient) ListPRFiles(owner, repo string, number int) ([]*github.CommitFile, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	var allFiles []*github.CommitFile
+
+	for {
+		files, resp, err := gc.client.PullRequests.ListFiles(gc.ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list PR files: %w", err)
+		}
+		allFiles = append(allFiles, files...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allFiles, nil
+}
+
+// GetFileContentFromRef retrieves file content from a specific git ref (branch, commit, tag)
+func (gc *GitHubClient) GetFileContentFromRef(owner, repo, path, ref string) (string, error) {
+	fileContent, _, _, err := gc.client.Repositories.GetContents(gc.ctx, owner, repo, path, &github.RepositoryContentGetOptions{
+		Ref: ref,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get file content: %w", err)
+	}
+
+	if fileContent == nil {
+		return "", fmt.Errorf("file not found")
+	}
+
+	content, err := fileContent.GetContent()
+	if err != nil {
+		return "", fmt.Errorf("failed to decode file content: %w", err)
+	}
+
+	return content, nil
+}
+
 // NewGitHubClient creates a new GitHub API client
 func NewGitHubClient(token string) *GitHubClient {
 	ctx := context.Background()
