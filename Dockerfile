@@ -22,7 +22,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o nytebubo .
 FROM alpine:latest
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates sqlite-libs
+RUN apk add --no-cache ca-certificates sqlite-libs git
 
 # Copy the binary to /usr/local/bin
 COPY --from=builder /app/nytebubo /usr/local/bin/nytebubo
