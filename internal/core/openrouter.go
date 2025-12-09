@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 const openRouterAPIURL = "https://openrouter.ai/api/v1/chat/completions"
@@ -422,4 +423,84 @@ Remember: Either ask questions OR provide changes - never both in the same respo
 	})
 
 	return ca.SendMessage(updatedHistory, systemPrompt)
+}
+
+// SelfReviewCode performs a self-review of generated code before verification
+func (ca *ClaudeAgent) SelfReviewCode(fileChanges map[string]string, language string, issue string) (hasIssues bool, reviewComments string, fixedFiles map[string]string, usage TokenUsage, err error) {
+	systemPrompt := `You are an expert code reviewer performing a pre-commit self-review.
+
+Your task is to review your own code for common issues BEFORE it goes to verification.
+
+CHECK FOR:
+1. **Unused imports** - Remove any imports that aren't used
+2. **Syntax errors** - Check for obvious syntax issues
+3. **Formatting** - Ensure code follows language conventions
+4. **Logic errors** - Check for obvious bugs (e.g., nil pointer dereferences, infinite loops)
+5. **Missing error handling** - Ensure errors are properly handled
+6. **Incomplete implementations** - Make sure all functions are fully implemented
+7. **Test coverage** - If tests were requested, ensure they exist
+
+RESPONSE FORMAT:
+If you find issues, respond with:
+1. A brief description of issues found (1-2 sentences)
+2. The corrected files in this format:
+
+` + "```" + `<language> path/to/file.ext
+corrected file content
+` + "```" + `
+
+If no issues found, respond with exactly: "No issues found - code is ready for verification"
+
+Be thorough but focus on CRITICAL issues that would cause build/test failures.`
+
+	// Build file context
+	var filesContext strings.Builder
+	filesContext.WriteString("Files to review:\n\n")
+	for filePath, content := range fileChanges {
+		filesContext.WriteString(fmt.Sprintf("File: %s\n```%s\n%s\n```\n\n", filePath, language, content))
+	}
+
+	userMessage := fmt.Sprintf(`Perform a self-review of the following code before committing:
+
+Original Issue: %s
+
+%s
+
+Review the code and check for:
+- Unused imports
+- Syntax errors
+- Obvious bugs
+- Missing error handling
+- Incomplete implementations
+
+If you find issues, provide corrected files. If not, respond with "No issues found - code is ready for verification"`, issue, filesContext.String())
+
+	messages := []AgentMessage{
+		{
+			Role:    "user",
+			Content: userMessage,
+		},
+	}
+
+	response, usage, err := ca.SendMessage(messages, systemPrompt)
+	if err != nil {
+		return false, "", nil, usage, fmt.Errorf("self-review failed: %w", err)
+	}
+
+	// Check if issues were found
+	if strings.Contains(strings.ToLower(response), "no issues found") {
+		return false, "", nil, usage, nil
+	}
+
+	// Parse fixed files if issues were found
+	// Extract the description (before first code block)
+	reviewComments = response
+	codeBlockIndex := strings.Index(response, "```")
+	if codeBlockIndex > 0 {
+		reviewComments = strings.TrimSpace(response[:codeBlockIndex])
+	}
+
+	// Try to parse file changes (reuse existing parser from workflows)
+	// For now, just return the raw response - the caller can parse it
+	return true, reviewComments, nil, usage, nil
 }

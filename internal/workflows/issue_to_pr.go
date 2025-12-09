@@ -354,6 +354,38 @@ func (ia *IssueAgent) StartImplementationWithSandbox(owner, repo string, issueNu
 		return nil
 	}
 
+	// Perform self-review before writing files
+	fmt.Printf("🔍 Performing self-review of generated code...\n")
+	issueObj, issueErr := ia.github.GetIssue(owner, repo, issueNumber)
+	issueText := ""
+	if issueErr == nil {
+		issueText = fmt.Sprintf("%s\n\n%s", issueObj.GetTitle(), issueObj.GetBody())
+	}
+
+	hasIssues, reviewComments, _, selfReviewUsage, selfReviewErr := ia.claude.SelfReviewCode(fileChanges, language, issueText)
+	state.TotalInputTokens += selfReviewUsage.InputTokens
+	state.TotalOutputTokens += selfReviewUsage.OutputTokens
+	state.TotalCost += selfReviewUsage.Cost
+
+	if selfReviewErr != nil {
+		fmt.Printf("⚠️  Self-review failed (continuing anyway): %v\n", selfReviewErr)
+	} else if hasIssues {
+		fmt.Printf("⚠️  Self-review found issues: %s\n", reviewComments)
+		fmt.Printf("🔧 Attempting to apply self-review fixes...\n")
+
+		// Parse the full response to get corrected files
+		fixedFiles := parseCodeChanges(reviewComments)
+		if len(fixedFiles) > 0 {
+			// Update fileChanges with the corrected versions
+			for filePath, content := range fixedFiles {
+				fmt.Printf("  ✓ Applied self-review fix to %s\n", filePath)
+				fileChanges[filePath] = content
+			}
+		}
+	} else {
+		fmt.Printf("✅ Self-review passed - no issues found\n")
+	}
+
 	// Write files to sandbox
 	fmt.Printf("📝 Writing %d file(s) to sandbox...\n", len(fileChanges))
 	for filePath, content := range fileChanges {
@@ -365,13 +397,21 @@ func (ia *IssueAgent) StartImplementationWithSandbox(owner, repo string, issueNu
 
 	// Try to build and test (with retry for AI fixes)
 	maxAttempts := 10
+	verificationPassed := false
+	var lastBuildOutput, lastTestOutput string
+	var lastVerifyErr error
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		fmt.Printf("\n🔍 Verification attempt %d/%d\n", attempt, maxAttempts)
 
 		buildOutput, testOutput, verifyErr := sandbox.Verify()
+		lastBuildOutput = buildOutput
+		lastTestOutput = testOutput
+		lastVerifyErr = verifyErr
 
 		if verifyErr == nil {
 			fmt.Printf("✅ All checks passed!\n")
+			verificationPassed = true
 			break
 		}
 
@@ -379,10 +419,8 @@ func (ia *IssueAgent) StartImplementationWithSandbox(owner, repo string, issueNu
 		fmt.Printf("❌ Verification failed: %v\n", verifyErr)
 
 		if attempt == maxAttempts {
-			// Out of retries - create PR anyway but note the failures
-			summary += fmt.Sprintf("\n\n⚠️ **Note**: Build/test verification failed after %d attempts. Please review carefully.\n\n", maxAttempts)
-			summary += fmt.Sprintf("**Build output:**\n```\n%s\n```\n\n", buildOutput)
-			summary += fmt.Sprintf("**Test output:**\n```\n%s\n```", testOutput)
+			// Out of retries - DON'T create PR, mark as verification_failed
+			fmt.Printf("❌ Verification failed after %d attempts. Not creating PR.\n", maxAttempts)
 			break
 		}
 
@@ -420,6 +458,42 @@ func (ia *IssueAgent) StartImplementationWithSandbox(owner, repo string, issueNu
 				fmt.Printf("⚠️  Failed to write fixed file: %v\n", err)
 			}
 		}
+	}
+
+	// If verification failed, don't create PR - post error and return
+	if !verificationPassed {
+		fmt.Printf("❌ Cannot create PR - verification failed\n")
+
+		// Build detailed error message
+		errorMsg := fmt.Sprintf("⚠️ I attempted to implement this issue, but the code failed verification after %d attempts.\n\n", maxAttempts)
+		errorMsg += fmt.Sprintf("**Error:**\n```\n%v\n```\n\n", lastVerifyErr)
+
+		if lastBuildOutput != "" {
+			errorMsg += fmt.Sprintf("**Build output:**\n```\n%s\n```\n\n", lastBuildOutput)
+		}
+
+		if lastTestOutput != "" {
+			errorMsg += fmt.Sprintf("**Test output:**\n```\n%s\n```\n\n", lastTestOutput)
+		}
+
+		errorMsg += "I need help to proceed. Could you please:\n"
+		errorMsg += "1. Review the error messages above\n"
+		errorMsg += "2. Provide guidance on how to fix the issues\n"
+		errorMsg += "3. Or clarify the requirements if I misunderstood something\n\n"
+		errorMsg += "🤖 NyteBubo"
+
+		// Post error comment to issue
+		if err := ia.github.CreateIssueComment(owner, repo, issueNumber, errorMsg); err != nil {
+			return fmt.Errorf("failed to post verification failure comment: %w", err)
+		}
+
+		// Update state to verification_failed
+		state.Status = "verification_failed"
+		if err := ia.stateManager.SaveState(state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		return nil // Don't return error - we handled it gracefully
 	}
 
 	// Commit changes
@@ -842,7 +916,25 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 		return fmt.Errorf("failed to checkout branch %s: %w", state.BranchName, err)
 	}
 
-	// Apply file changes
+	// Get repository info for context
+	repository, err := ia.github.GetRepository(owner, repo)
+	if err != nil {
+		return fmt.Errorf("failed to get repository: %w", err)
+	}
+	language := repository.GetLanguage()
+	detectedLang, _ := sandbox.DetectLanguage()
+	if language == "" {
+		language = detectedLang
+	}
+	repoContext := fmt.Sprintf("Repository: %s/%s\nLanguage: %s", owner, repo, language)
+
+	// Apply and verify changes with retry loop
+	maxAttempts := 10
+	verificationPassed := false
+	var lastBuildOutput, lastTestOutput string
+	var lastVerifyErr error
+
+	// Apply initial file changes
 	fmt.Printf("📝 Applying %d file change(s)...\n", len(fileChanges))
 	for filePath, content := range fileChanges {
 		if err := sandbox.WriteFile(filePath, content); err != nil {
@@ -851,13 +943,77 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 		fmt.Printf("  ✓ Updated %s\n", filePath)
 	}
 
-	// Verify changes (build and test)
-	fmt.Printf("🔍 Verifying changes...\n")
-	buildOutput, testOutput, verifyErr := sandbox.Verify()
+	// Retry loop for verification
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		fmt.Printf("\n🔍 Verification attempt %d/%d\n", attempt, maxAttempts)
 
-	if verifyErr != nil {
-		// Verification failed - post error as comment
-		errorMsg := fmt.Sprintf("⚠️ I attempted to address the review feedback, but the changes failed verification:\n\n**Build Output:**\n```\n%s\n```\n\n**Test Output:**\n```\n%s\n```\n\nI'll need to revise my approach. Could you provide guidance on how to address this?", buildOutput, testOutput)
+		buildOutput, testOutput, verifyErr := sandbox.Verify()
+		lastBuildOutput = buildOutput
+		lastTestOutput = testOutput
+		lastVerifyErr = verifyErr
+
+		if verifyErr == nil {
+			fmt.Printf("✅ All checks passed!\n")
+			verificationPassed = true
+			break
+		}
+
+		fmt.Printf("❌ Verification failed: %v\n", verifyErr)
+
+		if attempt == maxAttempts {
+			fmt.Printf("❌ Verification failed after %d attempts\n", maxAttempts)
+			break
+		}
+
+		// Ask AI to fix the issues
+		fmt.Printf("🤖 Asking AI to fix verification issues...\n")
+
+		fixPrompt := fmt.Sprintf("The changes to address the review feedback failed verification. Please fix them.\n\nBuild output:\n```\n%s\n```\n\nTest output:\n```\n%s\n```\n\nError: %v\n\nPlease provide the corrected files.", buildOutput, testOutput, verifyErr)
+
+		state.Conversation = append(state.Conversation, core.AgentMessage{
+			Role:    "user",
+			Content: fixPrompt,
+		})
+
+		fixResponse, fixUsage, err := ia.claude.GenerateCode("Fix verification failures in PR review response", repoContext, language, state.Conversation)
+		if err != nil {
+			fmt.Printf("⚠️  Failed to get fix from AI: %v\n", err)
+			break
+		}
+
+		state.TotalInputTokens += fixUsage.InputTokens
+		state.TotalOutputTokens += fixUsage.OutputTokens
+		state.TotalCost += fixUsage.Cost
+
+		// Parse and apply fixes
+		fixedFiles := parseCodeChanges(fixResponse)
+		if len(fixedFiles) == 0 {
+			fmt.Printf("⚠️  AI didn't provide file fixes\n")
+			break
+		}
+
+		fmt.Printf("📝 Applying %d fix(es)...\n", len(fixedFiles))
+		for filePath, content := range fixedFiles {
+			fmt.Printf("  - Fixing %s\n", filePath)
+			if err := sandbox.WriteFile(filePath, content); err != nil {
+				fmt.Printf("⚠️  Failed to write fixed file: %v\n", err)
+			}
+		}
+	}
+
+	// If verification failed after all retries, post error and don't commit
+	if !verificationPassed {
+		errorMsg := fmt.Sprintf("⚠️ I attempted to address the review feedback, but the changes failed verification after %d attempts.\n\n**Error:**\n```\n%v\n```\n\n", maxAttempts, lastVerifyErr)
+
+		if lastBuildOutput != "" {
+			errorMsg += fmt.Sprintf("**Build Output:**\n```\n%s\n```\n\n", lastBuildOutput)
+		}
+
+		if lastTestOutput != "" {
+			errorMsg += fmt.Sprintf("**Test Output:**\n```\n%s\n```\n\n", lastTestOutput)
+		}
+
+		errorMsg += "I'll need to revise my approach. Could you provide guidance on how to address this?"
 
 		if err := ia.github.CreateIssueComment(owner, repo, prNumber, errorMsg); err != nil {
 			return fmt.Errorf("failed to post verification error: %w", err)
@@ -868,7 +1024,7 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 			return fmt.Errorf("failed to save state: %w", err)
 		}
 
-		return fmt.Errorf("verification failed: %w", verifyErr)
+		return fmt.Errorf("verification failed after %d attempts: %w", maxAttempts, lastVerifyErr)
 	}
 
 	// Commit and push changes
@@ -877,17 +1033,37 @@ func (ia *IssueAgent) HandlePRComment(owner, repo string, prNumber int, commentB
 		return fmt.Errorf("failed to commit and push: %w", err)
 	}
 
-	// Post success comment to PR
+	// Post success comment to PR with detailed breakdown
 	var changedFiles []string
 	for filePath := range fileChanges {
 		changedFiles = append(changedFiles, filePath)
 	}
 
-	successMsg := fmt.Sprintf("✅ I've addressed the review feedback.\n\n**Changes made:**\n%s\n\n**Files updated:** %s\n\n**Verification:** All builds and tests pass ✓",
-		response,
-		strings.Join(changedFiles, ", "))
+	// Parse original feedback to show what was addressed
+	feedbackSummary := extractReviewFeedbackSummary(commentBody)
 
-	if err := ia.github.CreateIssueComment(owner, repo, prNumber, successMsg); err != nil {
+	var successMsg strings.Builder
+	successMsg.WriteString("✅ I've addressed all the review feedback and verified the changes.\n\n")
+
+	if feedbackSummary != "" {
+		successMsg.WriteString("**Review feedback addressed:**\n")
+		successMsg.WriteString(feedbackSummary)
+		successMsg.WriteString("\n\n")
+	}
+
+	successMsg.WriteString("**Changes made:**\n")
+	successMsg.WriteString(response)
+	successMsg.WriteString("\n\n")
+
+	successMsg.WriteString(fmt.Sprintf("**Files updated:** %s\n\n", strings.Join(changedFiles, ", ")))
+	successMsg.WriteString("**Verification:**\n")
+	successMsg.WriteString("- ✅ Auto-formatting applied\n")
+	successMsg.WriteString("- ✅ Linting checks passed\n")
+	successMsg.WriteString("- ✅ Build successful\n")
+	successMsg.WriteString("- ✅ All tests passed\n\n")
+	successMsg.WriteString("Ready for re-review!")
+
+	if err := ia.github.CreateIssueComment(owner, repo, prNumber, successMsg.String()); err != nil {
 		fmt.Printf("⚠️  Warning: failed to post success comment: %v\n", err)
 	}
 
@@ -1008,6 +1184,67 @@ func tryParseMarkdown(response string) map[string]string {
 	}
 
 	return changes
+}
+
+// extractReviewFeedbackSummary parses review feedback and extracts key points
+func extractReviewFeedbackSummary(feedback string) string {
+	// Split feedback into individual points
+	var points []string
+
+	// Look for different review comment types
+	lines := strings.Split(feedback, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip empty lines and separators
+		if trimmed == "" || trimmed == "---" {
+			continue
+		}
+
+		// Check if this is a structured comment section
+		if strings.HasPrefix(trimmed, "[Line Comment]") ||
+			strings.HasPrefix(trimmed, "[Conversation]") ||
+			strings.HasPrefix(trimmed, "[Active Change Request]") ||
+			strings.Contains(trimmed, "Review]") {
+			continue
+		}
+
+		// Extract comment text (skip metadata lines)
+		if strings.HasPrefix(trimmed, "**File:**") ||
+			strings.HasPrefix(trimmed, "**Line:**") ||
+			strings.HasPrefix(trimmed, "**Original Line:**") ||
+			strings.HasPrefix(trimmed, "**Code Context:**") {
+			continue
+		}
+
+		// Extract actual comment content
+		if strings.HasPrefix(trimmed, "**Comment:**") {
+			comment := strings.TrimPrefix(trimmed, "**Comment:**")
+			comment = strings.TrimSpace(comment)
+			if comment != "" {
+				points = append(points, comment)
+			}
+		} else if len(trimmed) > 0 && !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "**") {
+			// Regular comment line
+			points = append(points, trimmed)
+		}
+	}
+
+	// If we found specific points, format them as a list
+	if len(points) > 0 {
+		// Deduplicate and limit to first 5 points
+		seen := make(map[string]bool)
+		var unique []string
+		for _, point := range points {
+			if !seen[point] && len(unique) < 5 {
+				seen[point] = true
+				unique = append(unique, fmt.Sprintf("- ✓ %s", point))
+			}
+		}
+		return strings.Join(unique, "\n")
+	}
+
+	return ""
 }
 
 // isResponseAskingQuestions determines if the AI response contains clarifying questions

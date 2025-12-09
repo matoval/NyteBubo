@@ -166,7 +166,7 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 	}
 
 	// If we have state, check if there are new comments we need to process
-	if state.Status == "waiting_for_clarification" {
+	if state.Status == "waiting_for_clarification" || state.Status == "verification_failed" {
 		newComments, err := p.getNewComments(owner, repo, issueNumber, state)
 		if err != nil {
 			return fmt.Errorf("failed to check for new comments: %w", err)
@@ -202,7 +202,30 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 			} else {
 				log.Printf("📝 Found %d new line-level comment(s)", len(lineComments))
 				for _, comment := range lineComments {
-					allFeedback = append(allFeedback, fmt.Sprintf("[Line Comment] %s", comment.GetBody()))
+					// Include full context: file, line, code snippet, and comment
+					filePath := comment.GetPath()
+					line := comment.GetLine()
+					originalLine := comment.GetOriginalLine()
+					diffHunk := comment.GetDiffHunk()
+					commentBody := comment.GetBody()
+
+					var feedbackMsg strings.Builder
+					feedbackMsg.WriteString("[Line Comment]\n")
+					feedbackMsg.WriteString(fmt.Sprintf("**File:** `%s`\n", filePath))
+
+					if line > 0 {
+						feedbackMsg.WriteString(fmt.Sprintf("**Line:** %d\n", line))
+					} else if originalLine > 0 {
+						feedbackMsg.WriteString(fmt.Sprintf("**Original Line:** %d\n", originalLine))
+					}
+
+					if diffHunk != "" {
+						feedbackMsg.WriteString(fmt.Sprintf("**Code Context:**\n```\n%s\n```\n", diffHunk))
+					}
+
+					feedbackMsg.WriteString(fmt.Sprintf("**Comment:** %s", commentBody))
+
+					allFeedback = append(allFeedback, feedbackMsg.String())
 				}
 			}
 
