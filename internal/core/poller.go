@@ -193,6 +193,55 @@ func (p *Poller) processIssue(owner, repo string, issue *github.Issue, handlers 
 		if state.PRNumber != nil {
 			log.Printf("🔍 PR Number is set: #%d, checking for all types of feedback...", *state.PRNumber)
 
+			// First, check if the PR is still open
+			pr, err := p.github.GetPullRequest(owner, repo, *state.PRNumber)
+			if err != nil {
+				log.Printf("❌ Error fetching PR #%d: %v", *state.PRNumber, err)
+			} else {
+				prState := pr.GetState()
+				log.Printf("📊 PR #%d current state: %s", *state.PRNumber, prState)
+
+				// If PR was closed (not merged), reset state to try again
+				if prState == "closed" && !pr.GetMerged() {
+					log.Printf("🔄 PR #%d was closed - resetting state to ready_to_implement to try again", *state.PRNumber)
+
+					// Post a comment letting them know we're starting fresh
+					comment := fmt.Sprintf("👋 I noticed that PR #%d was closed. I'll create a fresh pull request with the improvements from my recent updates.\n\n🤖 NyteBubo", *state.PRNumber)
+					if err := p.github.CreateIssueComment(owner, repo, issueNumber, comment); err != nil {
+						log.Printf("⚠️  Warning: failed to post restart comment: %v", err)
+					}
+
+					// Reset state
+					state.Status = "ready_to_implement"
+					state.PRNumber = nil
+					// Clear branch name so a new unique branch will be created
+					state.BranchName = ""
+
+					if err := p.stateManager.SaveState(state); err != nil {
+						log.Printf("❌ Error saving reset state: %v", err)
+					}
+
+					// Trigger new implementation attempt
+					if handlers.HandleImplementation != nil {
+						if err := handlers.HandleImplementation(owner, repo, issueNumber); err != nil {
+							log.Printf("❌ Error starting fresh implementation: %v", err)
+						}
+					}
+
+					return nil
+				}
+
+				// If PR was merged, mark as completed
+				if pr.GetMerged() {
+					log.Printf("✅ PR #%d was merged - marking issue as completed", *state.PRNumber)
+					state.Status = "completed"
+					if err := p.stateManager.SaveState(state); err != nil {
+						log.Printf("❌ Error saving completed state: %v", err)
+					}
+					return nil
+				}
+			}
+
 			var allFeedback []string
 
 			// 1. Check for line-level review comments
